@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from collections import namedtuple
+import matplotlib.pyplot as plt
 
 import IPython
 
@@ -34,10 +35,11 @@ class Memory:
             d.append(sample.done)
 
         return Sequence(torch.tensor(s).float(),
-                        torch.tensor(a),
-                        torch.tensor(r),
+                        torch.tensor(a).float(),
+                        torch.tensor(r).float(),
                         torch.tensor(s1).float(),
                         torch.tensor(d))
+
 
 # referenced from github.com/minimalrl
 class NoiseProcess:
@@ -84,24 +86,25 @@ class Critic(torch.nn.Module):
         x_layer1 = F.relu(self.layer1x(x))
         a_layer1 = F.relu(self.layer1a(a))
 
-        state_action_pair = torch.cat((x_layer1, a_layer1))
+        state_action_pair = torch.cat((x_layer1, a_layer1),axis=-1)
 
         q_value = F.relu(self.layer2(state_action_pair))
 
         return q_value
 
-def update_net(net, other_net):
+
+def update_net(target_net, net, tau):
     # referenced from
     # https://stackoverflow.com/questions/49446785/how-can-i-update-the-parameters-of-a-neural-network-in-pytorch
-    state_dict = net.state_dict()
-    other_state_dict = other_net.state_dict()
+    target_dict = target_net.state_dict()
+    other_dict = net.state_dict()
 
-    i=0
-    for name, param in state_dict.items():
-        transformed_param = param * 0.9
-        state_dict[name].copy_(transformed_param)
+    for key, val in target_dict.items():
+        other_val = other_dict[key]
+        averaged_val = tau * other_val + (1.0 - tau) * val
+        target_dict[key].copy_(averaged_val)
 
-        i+=1
+    # target_net = TAU * net + (1 - TAU) * target_net
 
 class DDPG:
     def __init__(self, obs_size, action_size):
@@ -112,6 +115,8 @@ class DDPG:
         self.target_critic = Critic(obs_size, action_size)
 
         self.memory = Memory(MEM_SIZE)
+
+        self.data = {"loss": []}
 
     # main training loop
     def train(self):
@@ -129,18 +134,34 @@ class DDPG:
 
                 self.update_networks()
 
+            if episode_num % PRINT_DATA == 0:
+                print("Episode: ", episode_num, " / ", MAX_EPISODES,
+                        " | Avg loss this period: ",
+                            np.array(self.data["loss"][-PRINT_DATA:]).mean().round(4))
+
     # mini-batch sample and update networks
     def update_networks(self):
         batch = self.memory.sample(BATCH_SIZE)
-        IPython.embed()
-        target_q = batch.reward + GAMMA*self.target_critic(batch.next_state, self.target_actor(batch.next_state))
+        target_q = batch.reward + GAMMA * \
+                        self.target_critic(batch.next_state,
+                            self.target_actor(batch.next_state))
 
-        loss = 1.0/BATCH_SIZE * sum((target_q - \
-                self.critic(batch.state, batch.action))**2)
+        self.critic.zero_grad()
+        self.actor.zero_grad()
+
+        loss = 1.0/BATCH_SIZE * (target_q - \
+                self.critic(batch.state, batch.action)).sum()**2
         policy_grad = 1.0/BATCH_SIZE
 
-        self.target_actor.tau_update(self.actor)
-        self.target_critic.tau_update(self.critic)
+        loss.backward()
+
+        # TODO: need to do loss and update networks
+        # optimizer.step()?
+
+        update_net(self.target_actor, self.actor, TAU)
+        update_net(self.target_critic, self.critic, TAU)
+
+        self.data["loss"].append(loss.item())
 
 
 ## Parameters ##
@@ -148,13 +169,15 @@ MAX_EPISODES = 200
 MAX_STEPS_PER_EP = 300
 MEM_SIZE = int(1E6)
 BATCH_SIZE = 64
-GAMMA = 0.99
-TAU = 0.001
+GAMMA = 0.99    # discount factor
+TAU = 0.001     # tau averaging for target network updating
 LEARNING_RATE_ACTOR = 1E-4
 LEARNING_RATE_CRITIC = 1E-3
 
 OU_NOISE_THETA = 0.15
 OU_NOISE_SIGMA = 0.2
+
+PRINT_DATA = 5 # how often to print data
 
 if __name__ == "__main__":
     env = gym.make("MountainCarContinuous-v0")

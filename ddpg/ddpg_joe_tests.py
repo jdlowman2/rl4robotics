@@ -48,20 +48,6 @@ class TestMemory(unittest.TestCase):
         self.assertTrue(type(batch.state) == torch.Tensor)
         self.assertTrue(type(batch.next_state) == torch.Tensor)
 
-    # def test_pytorch_memory(self):
-    #     mem = Memory(2)
-    #     mem.push(make_dummy_sequence())
-    #     mem.push(make_dummy_sequence())
-
-    #     IPython.embed()
-
-    #     batch = mem.sample(2)
-
-    #     self.assertTrue((torch_batch.state.numpy() == batch.state).all())
-    #     self.assertTrue((torch_batch.action.numpy() == batch.action).all())
-    #     self.assertTrue((torch_batch.next_state.numpy() == batch.next_state).all())
-    #     self.assertTrue((torch_batch.reward.numpy() == batch.reward).all())
-    #     self.assertTrue((torch_batch.done.numpy() == batch.done).all())
 
 class TestNoise(unittest.TestCase):
 
@@ -93,6 +79,20 @@ class TestDDPG(unittest.TestCase):
         action_selected = ddpg.actor(dummy_obs)
         q = ddpg.critic(dummy_obs, action_selected)
 
+    # def test_network_update(self):
+    #     actor = Actor(1,1)
+    #     target_actor = Actor(1,1)
+
+    #     # make sure parameters are initialized differently
+    #     for key, val in target_actor.state_dict().items():
+    #         self.assertFalse((val == actor.state_dict()[key]).all().item())
+
+    #     prev_target = target_actor.state_dict()
+    #     update_net(target_actor, actor, 0.005)
+
+    #     for key, val in target_actor.state_dict().items():
+    #         self.assertFalse((val == actor.state_dict()[key]).all().item())
+    #         self.assertFalse((val == prev_target[key]).all().item())
 
 if __name__ == "__main__":
     unittest.main()
