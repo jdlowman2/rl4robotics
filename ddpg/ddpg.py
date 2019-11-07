@@ -5,6 +5,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from collections import namedtuple
 import matplotlib.pyplot as plt
+import time
 
 import IPython
 
@@ -109,8 +110,27 @@ def update_net(target_net, net, tau):
 
     # target_net = TAU * net + (1 - TAU) * target_net
 
+class Plotter:
+    def __init__(self, print_data_freq):
+        plt.ion()
+        self.print_data_freq = print_data_freq
+        self.fig, self.ax = plt.subplots(1, 1, num="DDPG Training Progress")
+        self.data = []
+
+    def plot(self, new_datum):
+        self.data.append(new_datum)
+        self.ax.clear()
+        self.ax.plot(self.data)
+        plt.pause(0.1)
+        plt.show()
+
 class DDPG:
-    def __init__(self, obs_size, action_size):
+    def __init__(self, envname):
+        self.env = gym.make(envname)
+        obs_size = self.env.observation_space.shape[0]
+        action_size = self.env.action_space.shape[0]
+
+        self.env.reset()
         self.actor = Actor(obs_size, action_size)
         self.critic = Critic(obs_size, action_size)
 
@@ -125,18 +145,23 @@ class DDPG:
         self.memory = Memory(MEM_SIZE)
 
         self.data = {"loss": []}
+        self.start_time = None
+
+        self.plotter = Plotter(PRINT_DATA)
+
 
     # main training loop
     def train(self):
         score = 0.0
+        self.start_time = time.time()
         for episode_num in range(MAX_EPISODES):
-            noise = NoiseProcess(env.action_space.shape)
+            noise = NoiseProcess(self.env.action_space.shape)
 
-            state = env.reset()
+            state = self.env.reset()
 
             for t in range(MAX_STEPS_PER_EP):
                 action = self.actor(torch.from_numpy(state).float()).detach().numpy() + noise.sample()
-                next_state, reward, done, _ = env.step(action)
+                next_state, reward, done, _ = self.env.step(action)
 
                 self.memory.push( \
                     Sequence(state, action, reward/100.0, next_state, done))
@@ -160,9 +185,15 @@ class DDPG:
             if episode_num % PRINT_DATA == 0 and episode_num != 0 :
                 print("Episode: ", episode_num, " / ", MAX_EPISODES,
                       " | Avg Score: ",
-                      np.array(score/PRINT_DATA).round(4))
+                      np.array(score/PRINT_DATA).round(4),
+                      " | Elapsed time [s]: ",
+                      round((time.time() - self.start_time), 2),
+                      )
+
+                self.plotter.plot(score/PRINT_DATA)
+
                 score = 0.0
-        env.close()
+        self.env.close()
 
     # mini-batch sample and update networks
     def update_networks(self):
@@ -210,9 +241,6 @@ OU_NOISE_SIGMA = 0.1
 PRINT_DATA = 20  # how often to print data
 
 if __name__ == "__main__":
-    # env = gym.make("MountainCarContinuous-v0")
-    env = gym.make("Pendulum-v0")
-    obs_size = env.observation_space.shape[0]
-    action_size = env.action_space.shape[0]
-    ddpg = DDPG(obs_size, action_size)
+    # ddpg = DDPG("MountainCarContinuous-v0")
+    ddpg = DDPG("Pendulum-v0")
     ddpg.train()
