@@ -74,10 +74,11 @@ class TestDDPG(unittest.TestCase):
         dummy_action = torch.tensor(np.zeros((2,))).float()
         dummy_obs = torch.tensor(np.zeros((10,))).float()
 
-        ddpg = DDPG(10, 2)
+        # actor = Actor(10, 2)
+        # critic = Critic(10, 2)
 
-        action_selected = ddpg.actor(dummy_obs)
-        q = ddpg.critic(dummy_obs, action_selected)
+        # action_selected = actor(dummy_obs)
+        # q = critic(dummy_obs, action_selected)
 
     # def test_network_update(self):
     #     actor = Actor(1,1)
