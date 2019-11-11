@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from collections import namedtuple
 import matplotlib.pyplot as plt
 import time
+import csv
 
 import IPython
 
@@ -63,18 +64,29 @@ class NoiseProcess:
 
 
 class Actor(torch.nn.Module):
-    def __init__(self, obs_size, action_size):
+    def __init__(self, obs_size, action_space):
         super(Actor, self).__init__()
         self.layer1 = torch.nn.Linear(obs_size, 128)
         self.layer2 = torch.nn.Linear(128, 64)
-        self.layer3 = torch.nn.Linear(64, action_size)
+        self.layer3 = torch.nn.Linear(64, action_space.shape[0])
+
+        self.action_space = action_space
 
     def forward(self, x):
         x = F.relu(self.layer1(x))
         x = F.relu(self.layer2(x))
         x = F.relu(self.layer3(x))
-        x = torch.tanh(x)*2
+        x = torch.tanh(x) * torch.from_numpy(self.action_space.high).float()
         return x
+
+    def take_action(self, state, added_noise=None):
+        state_x = torch.from_numpy(state).float()
+        action = self.forward(state_x).detach().numpy()
+
+        if added_noise is not None:
+            action += added_noise
+
+        return action
 
 
 class Critic(torch.nn.Module):
@@ -108,7 +120,6 @@ def update_net(target_net, net, tau):
         averaged_val = tau * other_val + (1.0 - tau) * val
         target_dict[key].copy_(averaged_val)
 
-    # target_net = TAU * net + (1 - TAU) * target_net
 
 class Plotter:
     def __init__(self, print_data_freq):
@@ -126,15 +137,20 @@ class Plotter:
 
 class DDPG:
     def __init__(self, envname):
+        self.envname = envname
         self.env = gym.make(envname)
+        self.reset()
+
+    def reset(self):
         obs_size = self.env.observation_space.shape[0]
         action_size = self.env.action_space.shape[0]
 
         self.env.reset()
-        self.actor = Actor(obs_size, action_size)
+
+        self.actor = Actor(obs_size, self.env.action_space)
         self.critic = Critic(obs_size, action_size)
 
-        self.target_actor = Actor(obs_size, action_size)
+        self.target_actor = Actor(obs_size, self.env.action_space)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.target_critic = Critic(obs_size, action_size)
         self.target_critic.load_state_dict(self.critic.state_dict())
@@ -149,7 +165,6 @@ class DDPG:
 
         self.plotter = Plotter(PRINT_DATA)
 
-
     # main training loop
     def train(self):
         score = 0.0
@@ -160,7 +175,7 @@ class DDPG:
             state = self.env.reset()
 
             for t in range(MAX_STEPS_PER_EP):
-                action = self.actor(torch.from_numpy(state).float()).detach().numpy() + noise.sample()
+                action = self.actor.take_action(state, noise.sample())
                 next_state, reward, done, _ = self.env.step(action)
 
                 self.memory.push( \
@@ -175,12 +190,6 @@ class DDPG:
             if self.memory.max_entry > MEMORY_MIN:
                 for _ in range(10):
                     self.update_networks()
-
-            # print average score not loss
-            # if episode_num % PRINT_DATA == 0:
-            #     print("Episode: ", episode_num, " / ", MAX_EPISODES,
-            #             " | Avg loss this period: ",
-            #                 np.array(self.data["loss"][-PRINT_DATA:]).mean().round(4))
 
             if episode_num % PRINT_DATA == 0 and episode_num != 0 :
                 print("Episode: ", episode_num, " / ", MAX_EPISODES,
@@ -199,14 +208,10 @@ class DDPG:
     def update_networks(self):
         batch = self.memory.sample(BATCH_SIZE)
 
-
         # reward is shape [64], target_critic output is [64, 1]
         target_q = batch.reward + GAMMA * \
                         self.target_critic(batch.next_state,
                             self.target_actor(batch.next_state))
-
-        # print(batch.state.size(), batch.action.size(), batch.reward.size())
-        # print(self.critic(batch.state, batch.action).size(), target_q.size())
 
         # update critic network
         critic_loss = F.smooth_l1_loss(self.critic(batch.state, batch.action), target_q)
@@ -225,6 +230,54 @@ class DDPG:
 
         # self.data["loss"].append(loss.item())
 
+    def demonstrate(self, save_snapshots=None):
+        self.env.close()
+        self.env = gym.make(self.envname)
+
+        state = self.env.reset()
+        done = False
+        step_num=0
+        while not done:
+            self.env.render()
+            action = self.actor(torch.from_numpy(state).float()).detach().numpy()
+            state, reward, done, _ = self.env.step(action)
+            step_num += 1
+
+    def save_experiment(self, experiment_name):
+        torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "_actor")
+        torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "_critic")
+
+        parameters = {
+            "MAX_EPISODES":MAX_EPISODES,
+            "MAX_STEPS_PER_EP":MAX_STEPS_PER_EP,
+            "MEM_SIZE":MEM_SIZE,
+            "MEMORY_MIN":MEMORY_MIN,
+            "BATCH_SIZE":BATCH_SIZE,
+            "GAMMA":GAMMA,
+            "TAU":TAU,
+            "LEARNING_RATE_ACTOR":LEARNING_RATE_ACTOR,
+            "LEARNING_RATE_CRITIC":LEARNING_RATE_CRITIC,
+            "OU_NOISE_THETA":OU_NOISE_THETA,
+            "OU_NOISE_SIGMA":OU_NOISE_SIGMA,
+            }
+
+        with open("experiments/" + experiment_name + ".csv", "w") as file:
+            w = csv.writer(file)
+            for key, val in parameters.items():
+                w.writerow([key, val, "\n"])
+
+    def load_experiment(self, experiment_name):
+        # NOTE: this does not load the training parameters, so you
+        # can't continue training
+        actor_file = "experiments/" + experiment_name + "_actor"
+        self.actor.load_state_dict(torch.load(actor_file))
+        critic_file = "experiments/" + experiment_name + "_critic"
+        self.critic.load_state_dict(torch.load(critic_file))
+
+        self.target_actor.load_state_dict(self.actor.state_dict())
+        self.target_critic.load_state_dict(self.critic.state_dict())
+
+
 ## Parameters ##
 MAX_EPISODES = 1000
 MAX_STEPS_PER_EP = 300
@@ -242,5 +295,9 @@ PRINT_DATA = 20  # how often to print data
 
 if __name__ == "__main__":
     # ddpg = DDPG("MountainCarContinuous-v0")
-    ddpg = DDPG("Pendulum-v0")
+    ddpg = DDPG("LunarLanderContinuous-v2")
+    # ddpg = DDPG("Pendulum-v0")
     ddpg.train()
+    ddpg.demonstrate()
+
+    IPython.embed() # use this to save or load networks
