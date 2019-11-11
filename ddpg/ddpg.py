@@ -248,6 +248,7 @@ class DDPG:
         torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "_critic")
 
         parameters = {
+            "Environment Name": self.envname,
             "MAX_EPISODES":MAX_EPISODES,
             "MAX_STEPS_PER_EP":MAX_STEPS_PER_EP,
             "MEM_SIZE":MEM_SIZE,
@@ -259,6 +260,7 @@ class DDPG:
             "LEARNING_RATE_CRITIC":LEARNING_RATE_CRITIC,
             "OU_NOISE_THETA":OU_NOISE_THETA,
             "OU_NOISE_SIGMA":OU_NOISE_SIGMA,
+            "start time": self.start_time,
             }
 
         with open("experiments/" + experiment_name + ".csv", "w") as file:
@@ -267,7 +269,7 @@ class DDPG:
                 w.writerow([key, val, "\n"])
 
     def load_experiment(self, experiment_name):
-        # NOTE: this does not load the training parameters, so you
+        # NOTE: this does not load the global training parameters, so you
         # can't continue training
         actor_file = "experiments/" + experiment_name + "_actor"
         self.actor.load_state_dict(torch.load(actor_file))
@@ -295,8 +297,8 @@ PRINT_DATA = 20  # how often to print data
 
 if __name__ == "__main__":
     # ddpg = DDPG("MountainCarContinuous-v0")
-    ddpg = DDPG("LunarLanderContinuous-v2")
-    # ddpg = DDPG("Pendulum-v0")
+    # ddpg = DDPG("LunarLanderContinuous-v2")
+    ddpg = DDPG("Pendulum-v0")
     ddpg.train()
     ddpg.demonstrate()
 
