@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import unittest
 
 import IPython
-from ddpg_joe import *
+from ddpg import *
 
 def make_dummy_sequence():
     return Sequence(np.zeros((4, 1)), 1.0, 0.0, np.ones((4, 1)), False)
