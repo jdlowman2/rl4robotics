@@ -10,6 +10,56 @@ import csv
 
 import IPython
 
+## For running in Google Colab, install these packages on the Colab machine
+# !apt-get update
+# !apt-get install cmake zlib1g-dev libjpeg-dev xvfb xorg-dev libboost-all-dev libsdl2-dev swig python3-dev python3-future python-opengl x11-utils
+
+# !apt-get -qq -y install libcusparse9.1 libnvrtc9.1 libnvtoolsext1 > /dev/null
+# !ln -snf /usr/lib/x86_64-linux-gnu/libnvrtc-builtins.so.9.1 /usr/lib/x86_64-linux-gnu/libnvrtc-builtins.so
+# !apt-get -qq -y install xvfb freeglut3-dev ffmpeg> /dev/null
+
+# !apt-get install xserver-xorg libglu1-mesa-dev mesa-common-dev libxmu-dev libxi-dev
+# !pip install box2d-py
+# !pip install gym[all]
+
+# !pip install pyvirtualdisplay
+# !pip install piglet
+
+import sys
+is_colab = 'google.colab' in sys.modules
+
+if is_colab:
+    from gym import logger as gymlogger
+    from gym.wrappers import Monitor
+    gymlogger.set_level(40) #error only
+
+    import math
+    import glob
+    import io
+    import base64
+    from IPython.display import HTML
+
+    from pyvirtualdisplay import Display
+    display = Display(visible=0, size=(1400, 900))
+    display.start()
+
+    def wrap_env(env):
+      env = Monitor(env, './video', force=True)
+      return env
+
+    def show_video():
+      mp4list = glob.glob('video/*.mp4')
+      if len(mp4list) > 0:
+        mp4 = mp4list[0]
+        video = io.open(mp4, 'r+b').read()
+        encoded = base64.b64encode(video)
+        IPython.display.display(HTML(data='''<video alt="test" autoplay
+                    loop controls style="height: 400px;">
+                    <source src="data:video/mp4;base64,{0}" type="video/mp4" />
+                 </video>'''.format(encoded.decode('ascii'))))
+      else:
+        print("Could not find video")
+
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
 
@@ -122,17 +172,28 @@ def update_net(target_net, net, tau):
 
 
 class Plotter:
-    def __init__(self, print_data_freq):
+    def __init__(self, env, print_data_freq):
         plt.ion()
+        self.env = env
         self.print_data_freq = print_data_freq
-        self.fig, self.ax = plt.subplots(1, 1, num="DDPG Training Progress")
+        self.fig, self.axes = plt.subplots(2, 1, num="DDPG Training Progress")
         self.data = []
+        self.actions = np.zeros((self.env.action_space.shape[0], 1))
+        self.noise = []
 
     def plot(self, new_datum):
         self.data.append(new_datum)
-        self.ax.clear()
-        self.ax.plot(self.data)
+        self.axes[0].clear()
+        self.axes[1].clear()
+
+        self.axes[0].plot(self.data)
         plt.pause(0.1)
+
+        for action_ind in range(self.actions.shape[0]):
+            self.axes[1].plot(self.actions[action_ind,:])
+        self.axes[1].plot(self.noise)
+        plt.pause(0.1)
+
         plt.show()
 
 class DDPG:
@@ -163,7 +224,7 @@ class DDPG:
         self.data = {"loss": []}
         self.start_time = None
 
-        self.plotter = Plotter(PRINT_DATA)
+        self.plotter = Plotter(self.env, PRINT_DATA)
 
     # main training loop
     def train(self):
@@ -174,8 +235,13 @@ class DDPG:
 
             state = self.env.reset()
 
+            self.plotter.actions = np.zeros((self.env.action_space.shape[0], 1))
+            self.plotter.noise = []
             for t in range(MAX_STEPS_PER_EP):
-                action = self.actor.take_action(state, noise.sample())
+                noise_to_add = noise.sample()
+                action = self.actor.take_action(state, noise_to_add)
+                self.plotter.actions = np.concatenate((self.plotter.actions, action[:, None]), axis=-1)
+                self.plotter.noise.append(noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
                 self.memory.push( \
@@ -202,6 +268,9 @@ class DDPG:
                 self.plotter.plot(score/PRINT_DATA)
 
                 score = 0.0
+                if episode_num % 100*PRINT_DATA == 0 and episode_num !=0:
+                    self.demonstrate()
+
         self.env.close()
 
     # mini-batch sample and update networks
@@ -214,12 +283,14 @@ class DDPG:
                             self.target_actor(batch.next_state))
 
         # update critic network
+        # should we call self.critic.zero_grad() here?
         critic_loss = F.smooth_l1_loss(self.critic(batch.state, batch.action), target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
         # update actor network
+        # should we call self.actor.zero_grad() here?
         actor_loss = -self.critic(batch.state, self.actor(batch.state)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -232,16 +303,30 @@ class DDPG:
 
     def demonstrate(self, save_snapshots=None):
         self.env.close()
-        self.env = gym.make(self.envname)
+        if is_colab:
+            self.env = wrap_env(gym.make(self.envname))
+        else:
+            self.env = gym.make(self.envname)
 
         state = self.env.reset()
         done = False
         step_num=0
+        rewards = 0.0
+
         while not done:
             self.env.render()
             action = self.actor(torch.from_numpy(state).float()).detach().numpy()
             state, reward, done, _ = self.env.step(action)
             step_num += 1
+            rewards += reward
+
+        self.env.close()
+        self.env = gym.make(self.envname)
+
+        if is_colab:
+            show_video()
+
+        print("Total reward: ", rewards, "  |  Final reward: ", reward)
 
     def save_experiment(self, experiment_name):
         torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "_actor")
@@ -281,7 +366,7 @@ class DDPG:
 
 
 ## Parameters ##
-MAX_EPISODES = 1000
+MAX_EPISODES = 10000
 MAX_STEPS_PER_EP = 300
 MEM_SIZE = int(1E6)
 MEMORY_MIN = int(2E3)
