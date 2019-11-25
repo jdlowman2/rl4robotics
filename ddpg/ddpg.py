@@ -4,11 +4,15 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from collections import namedtuple
-import matplotlib.pyplot as plt
 import time
 import csv
+import sys
 
 import IPython
+
+from memory import *
+from actor_critic_networks import *
+from plotter import *
 
 ## For running in Google Colab, install these packages on the Colab machine
 # !apt-get update
@@ -25,74 +29,13 @@ import IPython
 # !pip install pyvirtualdisplay
 # !pip install piglet
 
-import sys
 is_colab = 'google.colab' in sys.modules
 
 if is_colab:
-    from gym import logger as gymlogger
-    from gym.wrappers import Monitor
-    gymlogger.set_level(40) #error only
-
-    import math
-    import glob
-    import io
-    import base64
-    from IPython.display import HTML
-
-    from pyvirtualdisplay import Display
-    display = Display(visible=0, size=(1400, 900))
-    display.start()
-
-    def wrap_env(env):
-      env = Monitor(env, './video', force=True)
-      return env
-
-    def show_video():
-      mp4list = glob.glob('video/*.mp4')
-      if len(mp4list) > 0:
-        mp4 = mp4list[0]
-        video = io.open(mp4, 'r+b').read()
-        encoded = base64.b64encode(video)
-        IPython.display.display(HTML(data='''<video alt="test" autoplay
-                    loop controls style="height: 400px;">
-                    <source src="data:video/mp4;base64,{0}" type="video/mp4" />
-                 </video>'''.format(encoded.decode('ascii'))))
-      else:
-        print("Could not find video")
+    from colab_utils import *
 
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
-
-class Memory:
-    def __init__(self, size):
-        self.size = size
-        self.data = np.empty(size, dtype=Sequence)
-        self.point_ind = 0
-        self.max_entry = 0
-
-    def push(self, sequence):
-        self.data[self.point_ind] = sequence
-        self.point_ind = (1+self.point_ind) % self.size
-        self.max_entry = max(self.max_entry, self.point_ind)
-
-    def sample(self, num_samples):
-        # get sample of sequences
-        samples = np.random.choice(self.data[:self.max_entry], num_samples)
-
-        # convert to single sequence of samples for batch processing
-        s, a, r, s1, d = [], [], [], [], []
-        for sample in samples:
-            s.append(sample.state)
-            a.append(sample.action)
-            r.append([sample.reward])
-            s1.append(sample.next_state)
-            d.append([sample.done])
-
-        return Sequence(torch.tensor(s).float(),
-                        torch.tensor(a).float(),
-                        torch.tensor(r).float(),
-                        torch.tensor(s1).float(),
-                        torch.tensor(d))
 
 
 # referenced from github.com/minimalrl
@@ -104,7 +47,6 @@ class NoiseProcess:
         self.prev_x = np.zeros(action_shape)
         self.mean = np.zeros(action_shape)
 
-
     def sample(self):
         x = self.prev_x + self.theta * self.dt * (self.mean - self.prev_x) + \
             self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mean.shape)
@@ -112,89 +54,25 @@ class NoiseProcess:
         self.prev_x = x
         return x
 
+class Metrics:
+    def __init__(self):
+        pass
 
-class Actor(torch.nn.Module):
-    def __init__(self, obs_size, action_space):
-        super(Actor, self).__init__()
-        self.layer1 = torch.nn.Linear(obs_size, 128)
-        self.layer2 = torch.nn.Linear(128, 64)
-        self.layer3 = torch.nn.Linear(64, action_space.shape[0])
+    def average_return(self, ddpg):
+        num_to_test = 10
+        rewards = np.zeros(num_to_test)
 
-        self.action_space = action_space
+        for demo_ind in range(num_to_test):
+            rewards[demo_ind] = ddpg.demonstrate()
 
-    def forward(self, x):
-        x = F.relu(self.layer1(x))
-        x = F.relu(self.layer2(x))
-        x = F.relu(self.layer3(x))
-        x = torch.tanh(x) * torch.from_numpy(self.action_space.high).float()
-        return x
+        return rewards.mean(), rewards.var()
 
-    def take_action(self, state, added_noise=None):
-        state_x = torch.from_numpy(state).float()
-        action = self.forward(state_x).detach().numpy()
-
-        if added_noise is not None:
-            action += added_noise
-
-        return action
-
-
-class Critic(torch.nn.Module):
-    def __init__(self, obs_size, action_size):
-        super(Critic, self).__init__()
-        self.layer1x = torch.nn.Linear(obs_size, 64)
-        self.layer1a = torch.nn.Linear(action_size, 64)
-
-        self.layer2 = torch.nn.Linear(128, 32)
-        self.layer3 = torch.nn.Linear(32, 1)
-
-    def forward(self, x, a):
-        x_layer1 = F.relu(self.layer1x(x))
-        a_layer1 = F.relu(self.layer1a(a))
-
-        state_action_pair = torch.cat([x_layer1, a_layer1], dim=1)
-        intermediate = F.relu(self.layer2(state_action_pair))
-        q_value = self.layer3(intermediate)
-
-        return q_value
-
-
-def update_net(target_net, net, tau):
-    # referenced from
-    # https://stackoverflow.com/questions/49446785/how-can-i-update-the-parameters-of-a-neural-network-in-pytorch
-    target_dict = target_net.state_dict()
-    other_dict = net.state_dict()
-
-    for key, val in target_dict.items():
-        other_val = other_dict[key]
-        averaged_val = tau * other_val + (1.0 - tau) * val
-        target_dict[key].copy_(averaged_val)
-
-
-class Plotter:
-    def __init__(self, env, print_data_freq):
-        plt.ion()
-        self.env = env
-        self.print_data_freq = print_data_freq
-        self.fig, self.axes = plt.subplots(2, 1, num="DDPG Training Progress")
-        self.data = []
-        self.actions = np.zeros((self.env.action_space.shape[0], 1))
-        self.noise = []
-
-    def plot(self, new_datum):
-        self.data.append(new_datum)
-        self.axes[0].clear()
-        self.axes[1].clear()
-
-        self.axes[0].plot(self.data)
-        plt.pause(0.1)
-
-        for action_ind in range(self.actions.shape[0]):
-            self.axes[1].plot(self.actions[action_ind,:])
-        self.axes[1].plot(self.noise)
-        plt.pause(0.1)
-
-        plt.show()
+# Run the agent 10 times every 100 episodes
+    # compute mean and standard dev across these iterations
+# Total reward during training (moving average)
+# Average episode length during training (moving average)
+# Speed of convergence:  how many episodes to get to "success reward" amount (defined for each environment.) (moving average)
+# Initialize algorithm 100 times and compare how many times it succeeds
 
 class DDPG:
     def __init__(self, envname):
@@ -208,12 +86,12 @@ class DDPG:
 
         self.env.reset()
 
-        self.actor = Actor(obs_size, self.env.action_space)
-        self.critic = Critic(obs_size, action_size)
+        self.actor = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
+        self.critic = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
 
-        self.target_actor = Actor(obs_size, self.env.action_space)
+        self.target_actor = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
         self.target_actor.load_state_dict(self.actor.state_dict())
-        self.target_critic = Critic(obs_size, action_size)
+        self.target_critic = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
         self.target_critic.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), LEARNING_RATE_ACTOR)
@@ -226,82 +104,175 @@ class DDPG:
 
         self.plotter = Plotter(self.env, PRINT_DATA)
 
+
+    def random_fill_memory(self, num_eps):
+        state = self.env.reset()
+        done = False
+
+        for episode in range(num_eps):
+            for t in range(20):
+                action = self.env.action_space.sample()
+                next_state, reward, done, _ = self.env.step(action)
+
+                if "mountain" in self.envname:
+                    reward = next_state[0] + 0.5
+                    if next_state[0] >= 0.5:
+                        reward += 1
+
+                self.memory.push( \
+                    Sequence(state, action, reward, next_state, done))
+                state = next_state
+
+        print("Number of sequences added to memory: ", self.memory.max_entry)
+
     # main training loop
     def train(self):
-        score = 0.0
         self.start_time = time.time()
+
+        self.random_fill_memory(FILL_MEM_SIZE) # get some random transitions for the memory buffer
+        episode_scores = []
+
         for episode_num in range(MAX_EPISODES):
             noise = NoiseProcess(self.env.action_space.shape)
 
-            state = self.env.reset()
-
             self.plotter.actions = np.zeros((self.env.action_space.shape[0], 1))
             self.plotter.noise = []
-            for t in range(MAX_STEPS_PER_EP):
+
+            state = self.env.reset()
+            done = False
+            step_scores = []
+
+            while not done:
                 noise_to_add = noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
-                self.plotter.actions = np.concatenate((self.plotter.actions, action[:, None]), axis=-1)
-                self.plotter.noise.append(noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
-                self.memory.push( \
-                    Sequence(state, action, reward/100.0, next_state, done))
+                self.plotter.actions = np.concatenate((self.plotter.actions, action[:, None]), axis=-1)
+                self.plotter.noise.append(noise_to_add)
+                if "mountain" in self.envname:
+                    reward = next_state[0] + 0.5
+                    if next_state[0] >= 0.5:
+                        reward += 1
 
-                score += reward
+                self.memory.push( \
+                    Sequence(state, action, reward, next_state, done))
+
+                step_scores.append(float(reward))
                 state = next_state
 
-                if done:
-                    break
+                if self.memory.max_entry > MEMORY_MIN:
+                    actor_loss, critic_loss = self.update_networks()
+                    self.plotter.actor_loss.append(actor_loss)
+                    self.plotter.critic_loss.append(critic_loss)
 
-            if self.memory.max_entry > MEMORY_MIN:
-                for _ in range(10):
-                    self.update_networks()
+            episode_scores.append(sum(step_scores))
 
-            if episode_num % PRINT_DATA == 0 and episode_num != 0 :
-                print("Episode: ", episode_num, " / ", MAX_EPISODES,
-                      " | Avg Score: ",
-                      np.array(score/PRINT_DATA).round(4),
-                      " | Elapsed time [s]: ",
-                      round((time.time() - self.start_time), 2),
-                      )
 
-                self.plotter.plot(score/PRINT_DATA)
 
-                score = 0.0
-                if episode_num % 100*PRINT_DATA == 0 and episode_num !=0:
-                    self.demonstrate()
+                if episode_num % PRINT_DATA == 0 and episode_num != 0 :
+                    average_episode_score = sum(episode_scores[-PRINT_DATA:])/float(PRINT_DATA)
+                    print("\nEpisode: ", episode_num, " / ", MAX_EPISODES,
+                          " | Avg Score: ",
+                          np.array(average_episode_score).round(4),
+                          " | Elapsed time [s]: ",
+                          round((time.time() - self.start_time), 2),
+                          )
+                    print("Actor network param: ", self.actor.layer1.weight.data.numpy()[0, :3])
+                    print("Critic network param: ", self.critic.layer1.weight.data.numpy()[0, :3])
+                    print("Actor loss: ", actor_loss.item(), "critic_loss: ", critic_loss.item())
+                    self.plotter.plot(average_episode_score)
 
+                    if episode_num % DEMONSTRATE_INTERVAL == 0 and episode_num !=0:
+                        self.demonstrate()
+
+                    self.plot_policy_map()
+
+        print("Finished training. Training time: ",
+                    round((time.time() - self.start_time), 2) )
         self.env.close()
 
     # mini-batch sample and update networks
     def update_networks(self):
         batch = self.memory.sample(BATCH_SIZE)
 
-        # reward is shape [64], target_critic output is [64, 1]
-        target_q = batch.reward + GAMMA * \
-                        self.target_critic(batch.next_state,
-                            self.target_actor(batch.next_state))
+        # modes for batch norm layers
+        self.target_actor.eval()
+        self.target_critic.eval()
+        self.critic.eval()
+
+        target_actor_a       = self.target_actor(batch.state)
+        critic_q             = self.critic(batch.state, batch.action)
+        target_critic_next_q = self.target_critic(batch.next_state, target_actor_a)
+
+        target_q = batch.reward + GAMMA * torch.mul(target_critic_next_q, batch.done.float())
 
         # update critic network
-        # should we call self.critic.zero_grad() here?
-        critic_loss = F.smooth_l1_loss(self.critic(batch.state, batch.action), target_q)
+        self.critic.train()
         self.critic_optimizer.zero_grad()
+        critic_loss = F.mse_loss(critic_q, target_q)
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        # update actor network
-        # should we call self.actor.zero_grad() here?
-        actor_loss = -self.critic(batch.state, self.actor(batch.state)).mean()
+        self.critic.eval()
         self.actor_optimizer.zero_grad()
+        actor_a = self.actor(batch.state)
+        self.actor.train()
+        actor_loss = -self.critic(batch.state, actor_a).mean() # gradient ascent for highest Q value
         actor_loss.backward()
         self.actor_optimizer.step()
+        self.actor.eval()
 
-        update_net(self.target_actor, self.actor, TAU)
-        update_net(self.target_critic, self.critic, TAU)
 
-        # self.data["loss"].append(loss.item())
+        # soft update
+        for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
+            target_param.data.copy_(TAU * param.data + (1 - TAU) * target_param.data)
 
-    def demonstrate(self, save_snapshots=None):
+        for param, target_param in zip(self.actor.parameters(), self.target_actor.parameters()):
+            target_param.data.copy_(TAU * param.data + (1 - TAU) * target_param.data)
+
+        return actor_loss, critic_loss
+
+    def plot_policy_map(self):
+        try:
+            self.policy_map_fig.clear("Policy Map")
+        except:
+            pass
+
+        self.policy_map_fig, self.policy_ax = plt.subplots(1, 1, num="Policy Map")
+
+        costheta = np.linspace(self.env.observation_space.low[0],
+                                    self.env.observation_space.high[0], 100)
+        sintheta = np.linspace(self.env.observation_space.low[1],
+                                    self.env.observation_space.high[1], 100)
+        theta = np.arctan2(sintheta, costheta)
+        thetadot = np.linspace(self.env.observation_space.low[2],
+                                    self.env.observation_space.high[2], 100)
+
+        policy_val = np.zeros((100, 100))
+
+        self.actor.eval()
+        with torch.no_grad():
+            for theta_ind, theta_val in enumerate(theta):
+                for thetadot_ind, thetadot_val in enumerate(thetadot):
+                    action = self.actor(torch.from_numpy(np.array([\
+                                                                    np.cos(theta_val),
+                                                                    np.sin(theta_val),
+                                                                    thetadot_val])).float())
+                    policy_val[theta_ind, thetadot_ind] = action.item()
+
+        plt.ion()
+        color_data = self.policy_ax.imshow(policy_val, cmap='hot', interpolation='nearest')
+        self.policy_ax.set_title("Policy Map")
+        self.policy_ax.set_xlabel("Theta")
+        self.policy_ax.set_ylabel("ThetaDot")
+        self.policy_ax.set_xticks(theta)
+        self.policy_ax.set_yticks(thetadot)
+        self.policy_map_fig.colorbar(color_data)
+        plt.show()
+        plt.tight_layout()
+        plt.pause(0.1)
+
+    def demonstrate(self):
         self.env.close()
         if is_colab:
             self.env = wrap_env(gym.make(self.envname))
@@ -310,14 +281,12 @@ class DDPG:
 
         state = self.env.reset()
         done = False
-        step_num=0
         rewards = 0.0
 
         while not done:
             self.env.render()
-            action = self.actor(torch.from_numpy(state).float()).detach().numpy()
+            action = self.actor.take_action(state, None)
             state, reward, done, _ = self.env.step(action)
-            step_num += 1
             rewards += reward
 
         self.env.close()
@@ -326,9 +295,15 @@ class DDPG:
         if is_colab:
             show_video()
 
-        print("Total reward: ", rewards, "  |  Final reward: ", reward)
+        print("Total reward: ", round(rewards, 4), "  |  Final reward: ", round(reward, 4))
+        return rewards
 
-    def save_experiment(self, experiment_name):
+    def save_experiment(self, experiment_name="experiment"):
+        t = time.localtime()
+        suffix = "_" + self.envname[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
+                str(t.tm_hour) + "_" + str(t.tm_min)
+        experiment_name = experiment_name + suffix
+
         torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "_actor")
         torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "_critic")
 
@@ -353,11 +328,14 @@ class DDPG:
             for key, val in parameters.items():
                 w.writerow([key, val, "\n"])
 
+        self.plotter.fig.savefig("experiments/" + experiment_name + \
+            "_training_curve" + ".png", dpi=200)
+
     def load_experiment(self, experiment_name):
         # NOTE: this does not load the global training parameters, so you
         # can't continue training
-        actor_file = "experiments/" + experiment_name + "_actor"
-        self.actor.load_state_dict(torch.load(actor_file))
+        # actor_file = "experiments/" + experiment_name + "_actor"
+        # self.actor.load_state_dict(torch.load(actor_file))
         critic_file = "experiments/" + experiment_name + "_critic"
         self.critic.load_state_dict(torch.load(critic_file))
 
@@ -366,25 +344,39 @@ class DDPG:
 
 
 ## Parameters ##
-MAX_EPISODES = 10000
+MAX_EPISODES = 2000
 MAX_STEPS_PER_EP = 300
 MEM_SIZE = int(1E6)
 MEMORY_MIN = int(2E3)
 BATCH_SIZE = 64
 GAMMA = 0.99    # discount factor
-TAU = 0.005     # tau averaging for target network updating
-LEARNING_RATE_ACTOR = 5E-4
-LEARNING_RATE_CRITIC = 1E-3
-OU_NOISE_THETA = 0.1
-OU_NOISE_SIGMA = 0.1
+TAU = 0.001     # tau averaging for target network updating
+LEARNING_RATE_ACTOR = 5E-5
+LEARNING_RATE_CRITIC = 1E-4
 
-PRINT_DATA = 20  # how often to print data
+L1_SIZE = 128
+L2_SIZE = 64
+
+OU_NOISE_THETA = 0.15
+OU_NOISE_SIGMA = 0.2 # sigma decaying over time?
+
+FILL_MEM_SIZE = 10
+
+PRINT_DATA = 10  # how often to print data
+DEMONSTRATE_INTERVAL = 10*PRINT_DATA
+
+def run_batch_experiments(num_exp_per_env, envnames):
+    for envname in envnames:
+        for exp_num in range(num_exp_per_env):
+            ddpg = DDPG(envname)
+            ddpg.train()
+            ddpg.save_experiment("experiment_"+str(exp_num))
+            plt.close("all")
+    return
 
 if __name__ == "__main__":
-    # ddpg = DDPG("MountainCarContinuous-v0")
-    # ddpg = DDPG("LunarLanderContinuous-v2")
-    ddpg = DDPG("Pendulum-v0")
-    ddpg.train()
-    ddpg.demonstrate()
-
-    IPython.embed() # use this to save or load networks
+    # # ddpg = DDPG("MountainCarContinuous-v0")
+    # # ddpg = DDPG("LunarLanderContinuous-v2")
+    # ddpg = DDPG("Pendulum-v0")
+    run_batch_experiments(1, ["Pendulum-v0"])
+    # IPython.embed() # use this to save or load networks
