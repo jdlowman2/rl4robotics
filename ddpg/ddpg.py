@@ -8,31 +8,14 @@ import time
 import csv
 import sys
 
+import argparse
+
 import IPython
 
 from memory import *
 from actor_critic_networks import *
-from plotter import *
+# from plotter import *
 
-## For running in Google Colab, install these packages on the Colab machine
-# !apt-get update
-# !apt-get install cmake zlib1g-dev libjpeg-dev xvfb xorg-dev libboost-all-dev libsdl2-dev swig python3-dev python3-future python-opengl x11-utils
-
-# !apt-get -qq -y install libcusparse9.1 libnvrtc9.1 libnvtoolsext1 > /dev/null
-# !ln -snf /usr/lib/x86_64-linux-gnu/libnvrtc-builtins.so.9.1 /usr/lib/x86_64-linux-gnu/libnvrtc-builtins.so
-# !apt-get -qq -y install xvfb freeglut3-dev ffmpeg> /dev/null
-
-# !apt-get install xserver-xorg libglu1-mesa-dev mesa-common-dev libxmu-dev libxi-dev
-# !pip install box2d-py
-# !pip install gym[all]
-
-# !pip install pyvirtualdisplay
-# !pip install piglet
-
-is_colab = 'google.colab' in sys.modules
-
-if is_colab:
-    from colab_utils import *
 
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
@@ -43,6 +26,8 @@ class NoiseProcess:
     def __init__(self, action_shape):
         self.theta = OU_NOISE_THETA
         self.sigma = OU_NOISE_SIGMA
+        self.sigma_decay = OU_NOISE_SIGMA_DECAY_PER_EPS
+        self.min_sigma = MIN_OU_NOISE_SIGMA
         self.dt = 0.01
         self.prev_x = np.zeros(action_shape)
         self.mean = np.zeros(action_shape)
@@ -54,18 +39,9 @@ class NoiseProcess:
         self.prev_x = x
         return x
 
-class Metrics:
-    def __init__(self):
-        pass
+    def decay(self):
+        self.sigma = max(self.min_sigma, self.sigma - self.sigma_decay)
 
-    def average_return(self, ddpg):
-        num_to_test = 10
-        rewards = np.zeros(num_to_test)
-
-        for demo_ind in range(num_to_test):
-            rewards[demo_ind] = ddpg.demonstrate()
-
-        return rewards.mean(), rewards.var()
 
 # Run the agent 10 times every 100 episodes
     # compute mean and standard dev across these iterations
@@ -79,6 +55,27 @@ class DDPG:
         self.envname = envname
         self.env = gym.make(envname)
         self.reset()
+
+        self.parameters = {
+            "Environment Name": self.envname,
+            "MAX_EPISODES":MAX_EPISODES,
+            "MAX_STEPS_PER_EP":MAX_STEPS_PER_EP,
+            "MEM_SIZE":MEM_SIZE,
+            "MEMORY_MIN":MEMORY_MIN,
+            "BATCH_SIZE":BATCH_SIZE,
+            "GAMMA":GAMMA,
+            "TAU":TAU,
+            "LEARNING_RATE_ACTOR":LEARNING_RATE_ACTOR,
+            "LEARNING_RATE_CRITIC":LEARNING_RATE_CRITIC,
+            "OU_NOISE_THETA":OU_NOISE_THETA,
+            "OU_NOISE_SIGMA":OU_NOISE_SIGMA,
+            "start time": self.start_time,
+            "L1_SIZE": L1_SIZE,
+            "L2_SIZE": L2_SIZE,
+            "FILL_MEM_SIZE": FILL_MEM_SIZE,
+            "OU_NOISE_SIGMA_DECAY_PER_EPS":OU_NOISE_SIGMA_DECAY_PER_EPS,
+            "MIN_OU_NOISE_SIGMA": MIN_OU_NOISE_SIGMA,
+            }
 
     def reset(self):
         obs_size = self.env.observation_space.shape[0]
@@ -101,9 +98,6 @@ class DDPG:
 
         self.data = {"loss": []}
         self.start_time = None
-
-        self.plotter = Plotter(self.env, PRINT_DATA)
-
 
     def random_fill_memory(self, num_eps):
         state = self.env.reset()
@@ -128,15 +122,14 @@ class DDPG:
     # main training loop
     def train(self):
         self.start_time = time.time()
+        print("Starting job: \n", self.parameters)
 
         self.random_fill_memory(FILL_MEM_SIZE) # get some random transitions for the memory buffer
         episode_scores = []
+        actor_loss, critic_loss = torch.tensor(1E6), torch.tensor(1E6)
 
         for episode_num in range(MAX_EPISODES):
             noise = NoiseProcess(self.env.action_space.shape)
-
-            self.plotter.actions = np.zeros((self.env.action_space.shape[0], 1))
-            self.plotter.noise = []
 
             state = self.env.reset()
             done = False
@@ -147,12 +140,10 @@ class DDPG:
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
-                self.plotter.actions = np.concatenate((self.plotter.actions, action[:, None]), axis=-1)
-                self.plotter.noise.append(noise_to_add)
-                if "mountain" in self.envname:
-                    reward = next_state[0] + 0.5
-                    if next_state[0] >= 0.5:
-                        reward += 1
+                # if "mountain" in self.envname:
+                #     reward = next_state[0] + 0.5
+                #     if next_state[0] >= 0.5:
+                #         reward += 1
 
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
@@ -162,33 +153,31 @@ class DDPG:
 
                 if self.memory.max_entry > MEMORY_MIN:
                     actor_loss, critic_loss = self.update_networks()
-                    self.plotter.actor_loss.append(actor_loss)
-                    self.plotter.critic_loss.append(critic_loss)
 
             episode_scores.append(sum(step_scores))
+            noise.decay()
 
+            if episode_num % PRINT_DATA == 0:
+                average_episode_score = sum(episode_scores[-PRINT_DATA:])/float(PRINT_DATA)
+                print("\nEpisode: ", episode_num, " / ", MAX_EPISODES,
+                      " | Avg Score: ",
+                      np.array(average_episode_score).round(4),
+                      " | Elapsed time [s]: ",
+                      round((time.time() - self.start_time), 2),
+                      )
+                print("Actor loss: ", actor_loss.detach().numpy().round(4).item(),
+                        "critic_loss: ", critic_loss.detach().numpy().round(4).item())
+                print("Noise sigma: ", noise.sigma)
 
-
-                if episode_num % PRINT_DATA == 0 and episode_num != 0 :
-                    average_episode_score = sum(episode_scores[-PRINT_DATA:])/float(PRINT_DATA)
-                    print("\nEpisode: ", episode_num, " / ", MAX_EPISODES,
-                          " | Avg Score: ",
-                          np.array(average_episode_score).round(4),
-                          " | Elapsed time [s]: ",
-                          round((time.time() - self.start_time), 2),
-                          )
-                    print("Actor network param: ", self.actor.layer1.weight.data.numpy()[0, :3])
-                    print("Critic network param: ", self.critic.layer1.weight.data.numpy()[0, :3])
-                    print("Actor loss: ", actor_loss.item(), "critic_loss: ", critic_loss.item())
-                    self.plotter.plot(average_episode_score)
-
-                    if episode_num % DEMONSTRATE_INTERVAL == 0 and episode_num !=0:
-                        self.demonstrate()
-
-                    self.plot_policy_map()
+            if episode_num % SAVE_FREQ == 0:
+                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
+                average, variance = self.compute_average_metric()
+                print("\nAverage metric at iteration ", episode_num)
+                print("Average: ", average, " variance: ", variance)
 
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
+        print("Episode Scores: \n", episode_scores)
         self.env.close()
 
     # mini-batch sample and update networks
@@ -222,7 +211,6 @@ class DDPG:
         self.actor_optimizer.step()
         self.actor.eval()
 
-
         # soft update
         for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
             target_param.data.copy_(TAU * param.data + (1 - TAU) * target_param.data)
@@ -232,70 +220,32 @@ class DDPG:
 
         return actor_loss, critic_loss
 
-    def plot_policy_map(self):
-        try:
-            self.policy_map_fig.clear("Policy Map")
-        except:
-            pass
+    def compute_average_metric(self):
+        num_to_test = 10
+        rewards = np.zeros(num_to_test)
 
-        self.policy_map_fig, self.policy_ax = plt.subplots(1, 1, num="Policy Map")
+        for demo_ind in range(num_to_test):
+            rewards[demo_ind] = self.demonstrate(render=False)
 
-        costheta = np.linspace(self.env.observation_space.low[0],
-                                    self.env.observation_space.high[0], 100)
-        sintheta = np.linspace(self.env.observation_space.low[1],
-                                    self.env.observation_space.high[1], 100)
-        theta = np.arctan2(sintheta, costheta)
-        thetadot = np.linspace(self.env.observation_space.low[2],
-                                    self.env.observation_space.high[2], 100)
+        print("Evaluation over ", num_to_test, "episodes.",
+                                " Mean: ", rewards.mean(),
+                                " | Variance: ", rewards.var())
 
-        policy_val = np.zeros((100, 100))
+        return rewards.mean(), rewards.var()
 
-        self.actor.eval()
-        with torch.no_grad():
-            for theta_ind, theta_val in enumerate(theta):
-                for thetadot_ind, thetadot_val in enumerate(thetadot):
-                    action = self.actor(torch.from_numpy(np.array([\
-                                                                    np.cos(theta_val),
-                                                                    np.sin(theta_val),
-                                                                    thetadot_val])).float())
-                    policy_val[theta_ind, thetadot_ind] = action.item()
-
-        plt.ion()
-        color_data = self.policy_ax.imshow(policy_val, cmap='hot', interpolation='nearest')
-        self.policy_ax.set_title("Policy Map")
-        self.policy_ax.set_xlabel("Theta")
-        self.policy_ax.set_ylabel("ThetaDot")
-        self.policy_ax.set_xticks(theta)
-        self.policy_ax.set_yticks(thetadot)
-        self.policy_map_fig.colorbar(color_data)
-        plt.show()
-        plt.tight_layout()
-        plt.pause(0.1)
-
-    def demonstrate(self):
-        self.env.close()
-        if is_colab:
-            self.env = wrap_env(gym.make(self.envname))
-        else:
-            self.env = gym.make(self.envname)
-
+    def demonstrate(self, render=True):
         state = self.env.reset()
         done = False
         rewards = 0.0
 
         while not done:
-            self.env.render()
+            if render:
+                self.env.render()
             action = self.actor.take_action(state, None)
             state, reward, done, _ = self.env.step(action)
             rewards += reward
 
-        self.env.close()
-        self.env = gym.make(self.envname)
-
-        if is_colab:
-            show_video()
-
-        print("Total reward: ", round(rewards, 4), "  |  Final reward: ", round(reward, 4))
+        self.env.reset()
         return rewards
 
     def save_experiment(self, experiment_name="experiment"):
@@ -307,29 +257,13 @@ class DDPG:
         torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "_actor")
         torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "_critic")
 
-        parameters = {
-            "Environment Name": self.envname,
-            "MAX_EPISODES":MAX_EPISODES,
-            "MAX_STEPS_PER_EP":MAX_STEPS_PER_EP,
-            "MEM_SIZE":MEM_SIZE,
-            "MEMORY_MIN":MEMORY_MIN,
-            "BATCH_SIZE":BATCH_SIZE,
-            "GAMMA":GAMMA,
-            "TAU":TAU,
-            "LEARNING_RATE_ACTOR":LEARNING_RATE_ACTOR,
-            "LEARNING_RATE_CRITIC":LEARNING_RATE_CRITIC,
-            "OU_NOISE_THETA":OU_NOISE_THETA,
-            "OU_NOISE_SIGMA":OU_NOISE_SIGMA,
-            "start time": self.start_time,
-            }
-
         with open("experiments/" + experiment_name + ".csv", "w") as file:
             w = csv.writer(file)
-            for key, val in parameters.items():
+            for key, val in self.parameters.items():
                 w.writerow([key, val, "\n"])
 
-        self.plotter.fig.savefig("experiments/" + experiment_name + \
-            "_training_curve" + ".png", dpi=200)
+        # self.plotter.fig.savefig("experiments/" + experiment_name + \
+        #     "_training_curve" + ".png", dpi=200)
 
     def load_experiment(self, experiment_name):
         # NOTE: this does not load the global training parameters, so you
@@ -344,26 +278,28 @@ class DDPG:
 
 
 ## Parameters ##
-MAX_EPISODES = 2000
+MAX_EPISODES = 50000
 MAX_STEPS_PER_EP = 300
 MEM_SIZE = int(1E6)
 MEMORY_MIN = int(2E3)
 BATCH_SIZE = 64
 GAMMA = 0.99    # discount factor
 TAU = 0.001     # tau averaging for target network updating
-LEARNING_RATE_ACTOR = 5E-5
-LEARNING_RATE_CRITIC = 1E-4
+LEARNING_RATE_ACTOR = 1E-4
+LEARNING_RATE_CRITIC = 1E-3
 
-L1_SIZE = 128
-L2_SIZE = 64
+L1_SIZE = 400
+L2_SIZE = 300
+FILL_MEM_SIZE = 20
 
 OU_NOISE_THETA = 0.15
 OU_NOISE_SIGMA = 0.2 # sigma decaying over time?
+OU_NOISE_SIGMA_DECAY_PER_EPS = 0.0 #OU_NOISE_SIGMA / MAX_EPISODES # reach .5 Sigma at halfway
+MIN_OU_NOISE_SIGMA = OU_NOISE_SIGMA
 
-FILL_MEM_SIZE = 10
-
-PRINT_DATA = 10  # how often to print data
-DEMONSTRATE_INTERVAL = 10*PRINT_DATA
+PRINT_DATA = 100  # how often to print data
+SAVE_FREQ = int(round(MAX_EPISODES/10)) # How often to save networks
+DEMONSTRATE_INTERVAL = 100000*PRINT_DATA
 
 def run_batch_experiments(num_exp_per_env, envnames):
     for envname in envnames:
@@ -375,8 +311,18 @@ def run_batch_experiments(num_exp_per_env, envnames):
     return
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env_name", type=str, default="LunarLanderContinuous-v2", help="Environment name")
+    parser.add_argument("--max_episodes", type=int, default=MAX_EPISODES, help="total number of episodes to train")
+    opt = parser.parse_args()
+    print(opt)
+
+    MAX_EPISODES = opt.max_episodes
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print("Device is ", device)
     # # ddpg = DDPG("MountainCarContinuous-v0")
     # # ddpg = DDPG("LunarLanderContinuous-v2")
     # ddpg = DDPG("Pendulum-v0")
-    run_batch_experiments(1, ["Pendulum-v0"])
+    run_batch_experiments(1, [opt.env_name])
     # IPython.embed() # use this to save or load networks
