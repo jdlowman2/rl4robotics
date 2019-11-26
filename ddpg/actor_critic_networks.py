@@ -56,8 +56,8 @@ class Actor(torch.nn.Module):
 class Critic(torch.nn.Module):
     def __init__(self, obs_size, action_size, l1_size=400, l2_size=300):
         super(Critic, self).__init__()
-        self.layer1 = torch.nn.Linear(obs_size+action_size, l1_size)
-        self.layer2 = torch.nn.Linear(l1_size, l2_size)
+        self.layer1 = torch.nn.Linear(obs_size, l1_size)
+        self.layer2 = torch.nn.Linear(l1_size+action_size, l2_size)
         self.layer3 = torch.nn.Linear(l2_size, 1)
 
         # Initialization and batch norm ideas from
@@ -79,10 +79,10 @@ class Critic(torch.nn.Module):
 
 
     def forward(self, x, a):
-        layer1_out = self.layer1(torch.cat([x, a], dim=1))
+        layer1_out = self.layer1(x)
         layer1_bn = F.relu(self.bn1(layer1_out))
 
-        layer2_out = self.layer2(layer1_bn)
+        layer2_out = self.layer2(torch.cat([layer1_bn, a], dim=1))
         layer2_bn = F.relu(self.bn2(layer2_out))
 
         q_value = self.layer3(layer2_bn)
