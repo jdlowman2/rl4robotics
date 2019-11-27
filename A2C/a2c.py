@@ -21,12 +21,14 @@ GAMMA = 0.99        # discount factor
 LR_ACTOR = 5E-4
 LR_CRITIC = 5E-4
 
-PRINT_DATA = 20     # how often to print data
+PRINT_DATA = 5     # how often to print data
 RENDER_GAME = False # View the Episode. 
 ######################################################################
 
-use_cuda = torch.cuda.is_available()
-print('use cuda : ', use_cuda)
+# use_cuda = torch.cuda.is_available()
+# print('use cuda : ', use_cuda)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using Device: ", device)
 
 class Plotter():
     def __init__(self):
@@ -42,7 +44,7 @@ class Actor(nn.Module):
     def forward(self, x):
         x = F.relu(self.layer1(x))
         x = F.relu(self.layer2(x))
-        x = F.log_softmax(self.layer3(x),dim=-1)
+        x = F.log_softmax(self.layer3(x), dim=-1)
         return x
 
 class Critic(nn.Module):
@@ -60,54 +62,60 @@ class Critic(nn.Module):
         q_value = self.layer3(x)
         return q_value
 
+
 class A2C:
     def __init__(self, envname):
         
         self.envname = envname
         self.env = gym.make(envname)
-        self.actor = Actor(self.env.observation_space.shape[0], self.env.action_space)
+        self.actor = Actor(self.env.observation_space.shape[0], self.env.action_space).to(device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=LR_ACTOR)
-        self.critic = Critic(self.env.observation_space.shape[0])
+        self.critic = Critic(self.env.observation_space.shape[0]).to(device)
         self.critic_optimizer = optim.Adam(self.actor.parameters(), lr=LR_CRITIC)
 
-        if use_cuda:
-            self.actor.cuda()
-            self.critic.cuda()
+        # if use_cuda:
+        #     self.actor.cuda()
+        #     self.critic.cuda()
 
         self.data = {"loss": []}
         self.start_time = None
 
     def select_action(self, state):
-        log_probs = self.actor(torch.from_numpy(state).float())
-        value = self.critic(torch.from_numpy(state).float())
-        action = torch.exp(log_probs).data.numpy()
+        state = torch.from_numpy(state).float().to(device)
+        log_probs = self.actor(state)
+        value = self.critic(state)
+        # action = torch.exp(log_probs).data.numpy()
+        action = torch.exp(log_probs).cpu().detach().numpy()
         return action, log_probs.sum(dim=-1), value
 
     def update_a2c(self, rewards, log_probs, values, state):
-        Qval = self.critic(torch.from_numpy(state).float())
-        Qval = Qval.detach().numpy()
+        state = torch.from_numpy(state).float().to(device)
+        Qval = self.critic(state)
+        Qval = Qval.cpu().detach().numpy()
         Qvals = np.zeros_like(values, dtype=np.float32)
         for t in reversed(range(len(rewards))):
             Qval = rewards[t] + GAMMA * Qval
             Qvals[t] = Qval 
 
-        Qvals = torch.from_numpy(Qvals).float()
-        log_probs = torch.stack(log_probs)
-        values = torch.stack(values)
+        Qvals = torch.from_numpy(Qvals).float().to(device)
+        log_probs = torch.stack(log_probs).to(device)
+        values = torch.stack(values).to(device)
 
         advantage = Qvals - values
         actor_loss = (-log_probs * advantage).mean()
         critic_loss = (advantage**2).mean()
+        # critic_loss = F.mse_loss(advantage, torch.zeros_like(advantage))
 
         self.actor_optimizer.zero_grad()
         self.critic_optimizer.zero_grad()
- 
+
         actor_loss.backward(retain_graph=True)
         critic_loss.backward(retain_graph=True)
+        # actor_loss.backward()
+        # critic_loss.backward()
 
         self.actor_optimizer.step()
         self.critic_optimizer.step()
-
 
     def train(self):
 
@@ -182,8 +190,15 @@ class A2C:
     # TODO -- Figure out how to save. 
     def save_experiment(self, experiment_name):
 
-        torch.save(self.actor,"experiments/" + experiments_name + "_actor")
-        torch.save(self.critic,"experiments/" + experiments_name + "_critic")
+        actor_path = "experiments/" + experiments_name + "_actor"
+        critic_path = "experiments/" + experiments_name + "_critic"
+
+        torch.save(self.actor.state_dict(), actor_path)
+        torch.save(self.critic.state_dict(), critic_path)
+
+        # if you want to load the model, use something similar to the following
+        # network = actor()
+        # actor.load_state_dict(torch.load(file_path))
 
         parameters = {
             "Environment Name": self.envname,
@@ -195,15 +210,15 @@ class A2C:
             "LEARNING_RATE_CRITIC":LR_CRITIC,
         }
 
-        with open("experiments/" + experiment_name + ".csv", "w") as file:
+        parameters_path = "experiments/" + experiment_name + ".csv"
+        with open(parameters_path, "w") as file:
             w = csv.writer(file)
             for key, val in parameters.items():
                 w.writerow([key, val, "\n"])
 
 
-
 if __name__ == "__main__":
     # A2C = A2C("MountainCarContinuous-v0")
-    # A2C = A2C("Pendulum-v0")
-    A2C = A2C("LunarLanderContinuous-v2")
+    A2C = A2C("Pendulum-v0")
+    # A2C = A2C("LunarLanderContinuous-v2")
     A2C.train()
