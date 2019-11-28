@@ -16,10 +16,8 @@ from memory import *
 from actor_critic_networks import *
 # from plotter import *
 
-
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
-
 
 # referenced from github.com/minimalrl
 class NoiseProcess:
@@ -52,17 +50,10 @@ class NoiseProcess:
 
 class DDPG:
     def __init__(self, opt):
-        self.envname = opt.env_name
-        self.env = gym.make(self.envname)
-        self.reset()
-
-        t = time.localtime()
-        self.name_suffix = "_" + self.envname[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
-                str(t.tm_hour) + "_" + str(t.tm_min)
-
         self.opt = opt
+        self.start_time = time.time()
         self.parameters = {
-            "Environment Name": self.envname,
+            "Environment Name": opt.env_name,
             "MAX_EPISODES":MAX_EPISODES,
             "MAX_STEPS_PER_EP":MAX_STEPS_PER_EP,
             "MEM_SIZE":MEM_SIZE,
@@ -84,11 +75,22 @@ class DDPG:
             "LastVarError": 1E6,
             }
 
+        self.reset()
+
     def reset(self):
+        self.envname = self.parameters["Environment Name"]
+        self.env = gym.make(self.envname)
+        self.env.reset()
+
+        t = time.localtime()
+        if not self.opt.load_from:
+            self.name_suffix = "_" + self.envname[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
+                    str(t.tm_hour) + "_" + str(t.tm_min)
+        else:
+            self.name_suffix = self.opt.load_from
+
         obs_size = self.env.observation_space.shape[0]
         action_size = self.env.action_space.shape[0]
-
-        self.env.reset()
 
         self.actor = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
         self.critic = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
@@ -104,14 +106,13 @@ class DDPG:
         self.memory = Memory(MEM_SIZE)
 
         self.data = {"loss": []}
-        self.start_time = None
+        self.start_time = time.time()
 
     def random_fill_memory(self, num_eps):
-        state = self.env.reset()
-        done = False
-
         for episode in range(num_eps):
-            for t in range(20):
+            state = self.env.reset()
+            done = False
+            while not done:
                 action = self.env.action_space.sample()
                 next_state, reward, done, _ = self.env.step(action)
 
@@ -128,7 +129,6 @@ class DDPG:
 
     # main training loop
     def train(self):
-        self.start_time = time.time()
         print("Starting job: \n", self.parameters)
 
         self.random_fill_memory(FILL_MEM_SIZE) # get some random transitions for the memory buffer
@@ -198,11 +198,11 @@ class DDPG:
         self.target_critic.eval()
         self.critic.eval()
 
-        target_actor_a       = self.target_actor(batch.state)
+        target_actor_a       = self.target_actor(batch.next_state) ##TODO: This should be batch.next_state
         critic_q             = self.critic(batch.state, batch.action)
         target_critic_next_q = self.target_critic(batch.next_state, target_actor_a)
 
-        target_q = batch.reward + GAMMA * torch.mul(target_critic_next_q, batch.done.float())
+        target_q = batch.reward + GAMMA * torch.mul(target_critic_next_q, (~batch.done).float())
 
         # update critic network
         self.critic.train()
@@ -277,8 +277,10 @@ class DDPG:
     def load_experiment(self, experiment_name):
         # NOTE: this does not load the global training parameters, so you
         # can't continue training
-        # actor_file = "experiments/" + experiment_name + "_actor"
-        # self.actor.load_state_dict(torch.load(actor_file))
+
+        self.params = read_params_from_file(self.opt)
+        self.reset()
+
         critic_file = "experiments/" + experiment_name + "_critic"
         self.critic.load_state_dict(torch.load(critic_file))
 
@@ -299,7 +301,7 @@ LEARNING_RATE_CRITIC = 1E-3
 
 L1_SIZE = 400
 L2_SIZE = 300
-FILL_MEM_SIZE = 20
+FILL_MEM_SIZE = 100
 
 OU_NOISE_THETA = 0.15
 OU_NOISE_SIGMA = 0.2 # sigma decaying over time?
@@ -308,7 +310,26 @@ MIN_OU_NOISE_SIGMA = OU_NOISE_SIGMA
 
 PRINT_DATA = 100  # how often to print data
 SAVE_FREQ = int(round(MAX_EPISODES/10)) # How often to save networks
-DEMONSTRATE_INTERVAL = 100000*PRINT_DATA
+DEMONSTRATE_INTERVAL = 1000*PRINT_DATA
+
+
+def read_params_from_file(opt):
+    load_from = opt.load_from
+    print("Filename: \n\t", "experiments/" + load_from + ".csv")
+    with open("experiments/" + load_from + ".csv", "r") as file:
+        reader = csv.reader(file)
+        params = dict()
+        for row in reader:
+            try:
+                params[row[0]] = int(row[1])
+            except ValueError:
+                try:
+                    params[row[0]] = float(row[1])
+                except ValueError:
+                    params[row[0]] = row[1]
+
+        return params
+
 
 def run_batch_experiments(num_exp_per_env, opt):
     envname = opt.env_name
@@ -323,6 +344,7 @@ if __name__ == "__main__":
     parser.add_argument("--env_name", type=str, default="LunarLanderContinuous-v2", help="Environment name")
     parser.add_argument("--exp_name", type=str, default="experiment_", help="Experiment name")
     parser.add_argument("--max_episodes", type=int, default=MAX_EPISODES, help="total number of episodes to train")
+    parser.add_argument("--load_from", type=str, default="", help="Train the networks or just load a file")
     opt = parser.parse_args()
     print(opt)
 
@@ -330,8 +352,12 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Device is ", device)
-    # # ddpg = DDPG("MountainCarContinuous-v0")
-    # # ddpg = DDPG("LunarLanderContinuous-v2")
-    # ddpg = DDPG("Pendulum-v0")
-    run_batch_experiments(1, opt)
+
+    if not opt.load_from:
+        run_batch_experiments(1, opt)
+    else:
+        ddpg = DDPG(opt)
+        ddpg.load_experiment(opt.load_from)
+        params = read_params_from_file(opt)
+        IPython.embed()
     # IPython.embed() # use this to save or load networks
