@@ -51,11 +51,16 @@ class NoiseProcess:
 # Initialize algorithm 100 times and compare how many times it succeeds
 
 class DDPG:
-    def __init__(self, envname):
-        self.envname = envname
-        self.env = gym.make(envname)
+    def __init__(self, opt):
+        self.envname = opt.env_name
+        self.env = gym.make(self.envname)
         self.reset()
 
+        t = time.localtime()
+        self.name_suffix = "_" + self.envname[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
+                str(t.tm_hour) + "_" + str(t.tm_min)
+
+        self.opt = opt
         self.parameters = {
             "Environment Name": self.envname,
             "MAX_EPISODES":MAX_EPISODES,
@@ -75,6 +80,8 @@ class DDPG:
             "FILL_MEM_SIZE": FILL_MEM_SIZE,
             "OU_NOISE_SIGMA_DECAY_PER_EPS":OU_NOISE_SIGMA_DECAY_PER_EPS,
             "MIN_OU_NOISE_SIGMA": MIN_OU_NOISE_SIGMA,
+            "LastMeanError":1E6,
+            "LastVarError": 1E6,
             }
 
     def reset(self):
@@ -140,10 +147,10 @@ class DDPG:
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
-                # if "mountain" in self.envname:
-                #     reward = next_state[0] + 0.5
-                #     if next_state[0] >= 0.5:
-                #         reward += 1
+                if "mountain" in self.envname:
+                    reward = next_state[0] + 0.5
+                    if next_state[0] >= 0.5:
+                        reward += 1
 
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
@@ -172,6 +179,8 @@ class DDPG:
             if episode_num % SAVE_FREQ == 0:
                 self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
                 average, variance = self.compute_average_metric()
+                self.parameters["LastMeanError"] = average
+                self.parameters["LastVarError"] = variance
                 print("\nAverage metric at iteration ", episode_num)
                 print("Average: ", average, " variance: ", variance)
 
@@ -248,14 +257,14 @@ class DDPG:
         self.env.reset()
         return rewards
 
-    def save_experiment(self, experiment_name="experiment"):
-        t = time.localtime()
-        suffix = "_" + self.envname[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
-                str(t.tm_hour) + "_" + str(t.tm_min)
-        experiment_name = experiment_name + suffix
+    def save_experiment(self, experiment_name=None):
+        if experiment_name is None:
+            experiment_name = self.opt.exp_name
 
-        torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "_actor")
-        torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "_critic")
+        experiment_name = experiment_name + self.name_suffix
+
+        torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "actor")
+        torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "critic")
 
         with open("experiments/" + experiment_name + ".csv", "w") as file:
             w = csv.writer(file)
@@ -301,18 +310,18 @@ PRINT_DATA = 100  # how often to print data
 SAVE_FREQ = int(round(MAX_EPISODES/10)) # How often to save networks
 DEMONSTRATE_INTERVAL = 100000*PRINT_DATA
 
-def run_batch_experiments(num_exp_per_env, envnames):
-    for envname in envnames:
-        for exp_num in range(num_exp_per_env):
-            ddpg = DDPG(envname)
-            ddpg.train()
-            ddpg.save_experiment("experiment_"+str(exp_num))
-            plt.close("all")
+def run_batch_experiments(num_exp_per_env, opt):
+    envname = opt.env_name
+    for exp_num in range(num_exp_per_env):
+        ddpg = DDPG(opt)
+        ddpg.train()
+        ddpg.save_experiment("finished_" + opt.exp_name + str(exp_num))
     return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env_name", type=str, default="LunarLanderContinuous-v2", help="Environment name")
+    parser.add_argument("--exp_name", type=str, default="experiment_", help="Experiment name")
     parser.add_argument("--max_episodes", type=int, default=MAX_EPISODES, help="total number of episodes to train")
     opt = parser.parse_args()
     print(opt)
@@ -324,5 +333,5 @@ if __name__ == "__main__":
     # # ddpg = DDPG("MountainCarContinuous-v0")
     # # ddpg = DDPG("LunarLanderContinuous-v2")
     # ddpg = DDPG("Pendulum-v0")
-    run_batch_experiments(1, [opt.env_name])
+    run_batch_experiments(1, opt)
     # IPython.embed() # use this to save or load networks
