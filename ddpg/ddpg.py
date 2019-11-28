@@ -53,26 +53,25 @@ class DDPG:
         self.opt = opt
         self.start_time = time.time()
         self.parameters = {
-            "Environment Name": opt.env_name,
-            "MAX_EPISODES":MAX_EPISODES,
-            "MAX_STEPS_PER_EP":MAX_STEPS_PER_EP,
-            "MEM_SIZE":MEM_SIZE,
-            "MEMORY_MIN":MEMORY_MIN,
-            "BATCH_SIZE":BATCH_SIZE,
-            "GAMMA":GAMMA,
-            "TAU":TAU,
-            "LEARNING_RATE_ACTOR":LEARNING_RATE_ACTOR,
-            "LEARNING_RATE_CRITIC":LEARNING_RATE_CRITIC,
-            "OU_NOISE_THETA":OU_NOISE_THETA,
-            "OU_NOISE_SIGMA":OU_NOISE_SIGMA,
-            "start time": self.start_time,
-            "L1_SIZE": L1_SIZE,
-            "L2_SIZE": L2_SIZE,
-            "FILL_MEM_SIZE": FILL_MEM_SIZE,
+            "Environment Name"            : opt.env_name,
+            "MAX_EPISODES"                : MAX_EPISODES,
+            "MEM_SIZE"                    : MEM_SIZE,
+            "MEMORY_MIN"                  : MEMORY_MIN,
+            "BATCH_SIZE"                  : BATCH_SIZE,
+            "GAMMA"                       : GAMMA,
+            "TAU"                         : TAU,
+            "LEARNING_RATE_ACTOR"         : LEARNING_RATE_ACTOR,
+            "LEARNING_RATE_CRITIC"        : LEARNING_RATE_CRITIC,
+            "OU_NOISE_THETA"              : OU_NOISE_THETA,
+            "OU_NOISE_SIGMA"              : OU_NOISE_SIGMA,
+            "start time"                  : self.start_time,
+            "L1_SIZE"                     : L1_SIZE,
+            "L2_SIZE"                     : L2_SIZE,
+            "FILL_MEM_SIZE"               : FILL_MEM_SIZE,
             "OU_NOISE_SIGMA_DECAY_PER_EPS":OU_NOISE_SIGMA_DECAY_PER_EPS,
-            "MIN_OU_NOISE_SIGMA": MIN_OU_NOISE_SIGMA,
-            "LastMeanError":1E6,
-            "LastVarError": 1E6,
+            "MIN_OU_NOISE_SIGMA"          : MIN_OU_NOISE_SIGMA,
+            "LastMeanError"               : 1E6,
+            "LastVarError"                : 1E6,
             }
 
         self.reset()
@@ -258,10 +257,7 @@ class DDPG:
         return rewards
 
     def save_experiment(self, experiment_name=None):
-        if experiment_name is None:
-            experiment_name = self.opt.exp_name
-
-        experiment_name = experiment_name + self.name_suffix
+        experiment_name = experiment_name + "_" + self.opt.exp_name + self.name_suffix
 
         torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "actor")
         torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "critic")
@@ -289,28 +285,27 @@ class DDPG:
 
 
 ## Parameters ##
-MAX_EPISODES = 50000
-MAX_STEPS_PER_EP = 300
-MEM_SIZE = int(1E6)
-MEMORY_MIN = int(2E3)
-BATCH_SIZE = 64
-GAMMA = 0.99    # discount factor
-TAU = 0.001     # tau averaging for target network updating
-LEARNING_RATE_ACTOR = 1E-4
-LEARNING_RATE_CRITIC = 1E-3
+MAX_EPISODES                = 50000
+MEM_SIZE                    = int(1E6)
+MEMORY_MIN                  = int(2E3)
+BATCH_SIZE                  = 64
+GAMMA                       = 0.99    # discount factor
+TAU                         = 0.001     # tau averaging for target network updating
+LEARNING_RATE_ACTOR         = 1E-4
+LEARNING_RATE_CRITIC        = 1E-3
 
-L1_SIZE = 400
-L2_SIZE = 300
-FILL_MEM_SIZE = 100
+L1_SIZE                     = 400
+L2_SIZE                     = 300
+FILL_MEM_SIZE               = 100
 
-OU_NOISE_THETA = 0.15
-OU_NOISE_SIGMA = 0.2 # sigma decaying over time?
-OU_NOISE_SIGMA_DECAY_PER_EPS = 0.0 #OU_NOISE_SIGMA / MAX_EPISODES # reach .5 Sigma at halfway
-MIN_OU_NOISE_SIGMA = OU_NOISE_SIGMA
+OU_NOISE_THETA              = 0.15
+OU_NOISE_SIGMA              = 0.2 # sigma decaying over time?
+OU_NOISE_SIGMA_DECAY_PER_EPS= 0.0 #OU_NOISE_SIGMA / MAX_EPISODES # reach .5 Sigma at halfway
+MIN_OU_NOISE_SIGMA          = OU_NOISE_SIGMA
 
-PRINT_DATA = 100  # how often to print data
-SAVE_FREQ = int(round(MAX_EPISODES/10)) # How often to save networks
-DEMONSTRATE_INTERVAL = 1000*PRINT_DATA
+PRINT_DATA                  = 100  # how often to print data
+SAVE_FREQ                   = int(round(MAX_EPISODES/10)) # How often to save networks
+DEMONSTRATE_INTERVAL        = 100000*PRINT_DATA
 
 
 def read_params_from_file(opt):
@@ -341,23 +336,58 @@ def run_batch_experiments(num_exp_per_env, opt):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="LunarLanderContinuous-v2", help="Environment name")
-    parser.add_argument("--exp_name", type=str, default="experiment_", help="Experiment name")
-    parser.add_argument("--max_episodes", type=int, default=MAX_EPISODES, help="total number of episodes to train")
-    parser.add_argument("--load_from", type=str, default="", help="Train the networks or just load a file")
+    parser.add_argument("--env_name"          , type=str, default="LunarLanderContinuous-v2", help="Environment name")
+    parser.add_argument("--exp_name"          , type=str, default="experiment_", help="Experiment name")
+    parser.add_argument("--load_from"         , type=str, default="", help="Train the networks or just load a file")
+    parser.add_argument("--max_episodes"      , type=int, default=MAX_EPISODES, help="total number of episodes to train")
+
+    parser.add_argument("--mem_min"           , type=int, default=MEMORY_MIN, help="")
+    parser.add_argument("--mem_size"          , type=int, default=MEM_SIZE, help="")
+    parser.add_argument("--batch_size"        , type=int, default=BATCH_SIZE, help="")
+
+    parser.add_argument("--gamma"             , type=int, default=GAMMA, help="")
+    parser.add_argument("--tau"               , type=int, default=TAU, help="")
+
+    parser.add_argument("--lr_actor"          , type=int, default=LEARNING_RATE_ACTOR, help="")
+    parser.add_argument("--lr_critic"         , type=int, default=LEARNING_RATE_CRITIC, help="")
+    parser.add_argument("--l1_size"           , type=int, default=L1_SIZE, help="")
+    parser.add_argument("--l2_size"           , type=int, default=L2_SIZE, help="")
+
+    parser.add_argument("--ou_noise_theta"    , type=int, default=OU_NOISE_THETA, help="")
+    parser.add_argument("--ou_noise_sigma"    , type=int, default=OU_NOISE_SIGMA, help="")
+    parser.add_argument("--ou_noise_decay"    , type=int, default=OU_NOISE_SIGMA_DECAY_PER_EPS, help="")
+    parser.add_argument("--min_ou_noise_sigma", type=int, default=MIN_OU_NOISE_SIGMA, help="")
     opt = parser.parse_args()
     print(opt)
 
-    MAX_EPISODES = opt.max_episodes
+    MAX_EPISODES                = opt.max_episodes
+    MEM_SIZE                    = opt.mem_size
+    MEMORY_MIN                  = opt.mem_min
+    BATCH_SIZE                  = opt.batch_size
+
+    GAMMA                       = opt.gamma
+    TAU                         = opt.tau
+
+    LEARNING_RATE_ACTOR         = opt.lr_actor
+    LEARNING_RATE_CRITIC        = opt.lr_critic
+    L1_SIZE                     = opt.l1_size
+    L2_SIZE                     = opt.l2_size
+
+    OU_NOISE_THETA              = opt.ou_noise_theta
+    OU_NOISE_SIGMA              = opt.ou_noise_sigma
+    OU_NOISE_SIGMA_DECAY_PER_EPS= opt.ou_noise_decay
+    MIN_OU_NOISE_SIGMA          = opt.min_ou_noise_sigma
+
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Device is ", device)
 
     if not opt.load_from:
         run_batch_experiments(1, opt)
+
     else:
-        ddpg = DDPG(opt)
+        # use this to save or load networks
+        ddpg  = DDPG(opt)
         ddpg.load_experiment(opt.load_from)
-        params = read_params_from_file(opt)
+        params= read_params_from_file(opt)
         IPython.embed()
-    # IPython.embed() # use this to save or load networks
