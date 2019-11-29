@@ -186,7 +186,7 @@ class DDPG:
         self.target_critic.eval()
         self.critic.eval()
 
-        target_actor_a       = self.target_actor(batch.next_state) ##TODO: This should be batch.next_state
+        target_actor_a       = self.target_actor(batch.next_state) # This should be batch.next_state
         critic_q             = self.critic(batch.state, batch.action)
         target_critic_next_q = self.target_critic(batch.next_state, target_actor_a)
 
@@ -264,8 +264,13 @@ class DDPG:
 
         self.params = read_params_from_file(self.opt)
         self.reset()
-        actor_file = Path("experiments/" + self.opt.load_from + "_actor")
+        actor_file = Path("experiments/" + self.opt.load_from + "actor")
         self.actor.load_state_dict(torch.load(actor_file))
+        critic_file = Path("experiments/" + self.opt.load_from + "critic")
+        self.critic.load_state_dict(torch.load(critic_file))
+
+        self.target_actor.load_state_dict(self.actor.state_dict())
+        self.target_critic.load_state_dict(self.critic.state_dict())
 
 
 def read_params_from_file(opt):
@@ -341,14 +346,15 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device is ", device)
 
+    ddpg = DDPG(opt)
+
     if not opt.load_from:
-        ddpg = DDPG(opt)
         ddpg.train()
         ddpg.save_experiment("finished_" + opt.exp_name + str(exp_num))
 
     else:
-        # use this to save or load networks
-        ddpg  = DDPG(opt)
-        ddpg.load_experiment(opt.load_from)
-        params= read_params_from_file(opt)
+        # Use this to save or load networks. Assumes you are loading from experiments/ subdirectory.
+        # Example Usage:
+        # $ python ddpg.py --load_from quicklunarlander/finished_quick0_quick_Lun_11_28_15_27
+        ddpg.load_experiment()
         IPython.embed()
