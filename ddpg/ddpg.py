@@ -9,6 +9,7 @@ import csv
 import sys
 
 import argparse
+from pathlib import Path
 
 import IPython
 
@@ -26,9 +27,11 @@ class NoiseProcess:
         self.sigma = OU_NOISE_SIGMA
         self.sigma_decay = OU_NOISE_SIGMA_DECAY_PER_EPS
         self.min_sigma = MIN_OU_NOISE_SIGMA
+
         self.dt = 0.01
+
         self.prev_x = np.zeros(action_shape)
-        self.mean = np.zeros(action_shape)
+        self.mean   = np.zeros(action_shape)
 
     def sample(self):
         x = self.prev_x + self.theta * self.dt * (self.mean - self.prev_x) + \
@@ -88,15 +91,15 @@ class DDPG:
         else:
             self.name_suffix = self.opt.load_from
 
-        obs_size = self.env.observation_space.shape[0]
+        obs_size    = self.env.observation_space.shape[0]
         action_size = self.env.action_space.shape[0]
 
-        self.actor = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
-        self.critic = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
+        self.actor        = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
+        self.critic       = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
 
         self.target_actor = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
         self.target_actor.load_state_dict(self.actor.state_dict())
-        self.target_critic = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
+        self.target_critic= Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
         self.target_critic.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), LEARNING_RATE_ACTOR)
@@ -104,7 +107,6 @@ class DDPG:
 
         self.memory = Memory(MEM_SIZE)
 
-        self.data = {"loss": []}
         self.start_time = time.time()
 
     def random_fill_memory(self, num_eps):
@@ -114,11 +116,6 @@ class DDPG:
             while not done:
                 action = self.env.action_space.sample()
                 next_state, reward, done, _ = self.env.step(action)
-
-                if "mountain" in self.envname:
-                    reward = next_state[0] + 0.5
-                    if next_state[0] >= 0.5:
-                        reward += 1
 
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
@@ -146,11 +143,6 @@ class DDPG:
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
-                if "mountain" in self.envname:
-                    reward = next_state[0] + 0.5
-                    if next_state[0] >= 0.5:
-                        reward += 1
-
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
 
@@ -176,12 +168,9 @@ class DDPG:
                 print("Noise sigma: ", noise.sigma)
 
             if episode_num % SAVE_FREQ == 0:
-                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
-                average, variance = self.compute_average_metric()
-                self.parameters["LastMeanError"] = average
-                self.parameters["LastVarError"] = variance
                 print("\nAverage metric at iteration ", episode_num)
-                print("Average: ", average, " variance: ", variance)
+                average, variance = self.compute_average_metric()
+                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
 
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
@@ -235,9 +224,11 @@ class DDPG:
         for demo_ind in range(num_to_test):
             rewards[demo_ind] = self.demonstrate(render=False)
 
-        print("Evaluation over ", num_to_test, "episodes.",
+        print("Evaluation over ", num_to_test, "episodes.\n\t",
                                 " Mean: ", rewards.mean(),
                                 " | Variance: ", rewards.var())
+        self.parameters["LastMeanError"] = rewards.mean()
+        self.parameters["LastVarError"] = rewards.var()
 
         return rewards.mean(), rewards.var()
 
@@ -267,45 +258,14 @@ class DDPG:
             for key, val in self.parameters.items():
                 w.writerow([key, val, "\n"])
 
-        # self.plotter.fig.savefig("experiments/" + experiment_name + \
-        #     "_training_curve" + ".png", dpi=200)
-
-    def load_experiment(self, experiment_name):
+    def load_experiment(self):
         # NOTE: this does not load the global training parameters, so you
         # can't continue training
 
         self.params = read_params_from_file(self.opt)
         self.reset()
-
-        critic_file = "experiments/" + experiment_name + "_critic"
-        self.critic.load_state_dict(torch.load(critic_file))
-
-        self.target_actor.load_state_dict(self.actor.state_dict())
-        self.target_critic.load_state_dict(self.critic.state_dict())
-
-
-## Parameters ##
-MAX_EPISODES                = 50000
-MEM_SIZE                    = int(1E6)
-MEMORY_MIN                  = int(2E3)
-BATCH_SIZE                  = 64
-GAMMA                       = 0.99    # discount factor
-TAU                         = 0.001     # tau averaging for target network updating
-LEARNING_RATE_ACTOR         = 1E-4
-LEARNING_RATE_CRITIC        = 1E-3
-
-L1_SIZE                     = 400
-L2_SIZE                     = 300
-FILL_MEM_SIZE               = 100
-
-OU_NOISE_THETA              = 0.15
-OU_NOISE_SIGMA              = 0.2 # sigma decaying over time?
-OU_NOISE_SIGMA_DECAY_PER_EPS= 0.0 #OU_NOISE_SIGMA / MAX_EPISODES # reach .5 Sigma at halfway
-MIN_OU_NOISE_SIGMA          = OU_NOISE_SIGMA
-
-PRINT_DATA                  = 100  # how often to print data
-SAVE_FREQ                   = int(round(MAX_EPISODES/10)) # How often to save networks
-DEMONSTRATE_INTERVAL        = 100000*PRINT_DATA
+        actor_file = Path("experiments/" + self.opt.load_from + "_actor")
+        self.actor.load_state_dict(torch.load(actor_file))
 
 
 def read_params_from_file(opt):
@@ -326,43 +286,39 @@ def read_params_from_file(opt):
         return params
 
 
-def run_batch_experiments(num_exp_per_env, opt):
-    envname = opt.env_name
-    for exp_num in range(num_exp_per_env):
-        ddpg = DDPG(opt)
-        ddpg.train()
-        ddpg.save_experiment("finished_" + opt.exp_name + str(exp_num))
-    return
-
 if __name__ == "__main__":
+    ## Parameters ##
     parser = argparse.ArgumentParser()
     parser.add_argument("--env_name"          , type=str, default="LunarLanderContinuous-v2", help="Environment name")
     parser.add_argument("--exp_name"          , type=str, default="experiment_", help="Experiment name")
     parser.add_argument("--load_from"         , type=str, default="", help="Train the networks or just load a file")
-    parser.add_argument("--max_episodes"      , type=int, default=MAX_EPISODES, help="total number of episodes to train")
 
-    parser.add_argument("--mem_min"           , type=int, default=MEMORY_MIN, help="")
-    parser.add_argument("--mem_size"          , type=int, default=MEM_SIZE, help="")
-    parser.add_argument("--batch_size"        , type=int, default=BATCH_SIZE, help="")
+    parser.add_argument("--max_episodes"      , type=int, default=50000, help="total number of episodes to train")
+    parser.add_argument("--mem_min"           , type=int, default=int(2E3), help="minimum size of replay memory before updating actor and critic networks")
+    parser.add_argument("--mem_size"          , type=int, default=int(1E6), help="total size of replay memory")
+    parser.add_argument("--fill_mem_size"     , type=int, default=100, help="number of episodes to run with random action to fill replay memory")
+    parser.add_argument("--batch_size"        , type=int, default=64, help="batch size when sampling from replay memory")
 
-    parser.add_argument("--gamma"             , type=int, default=GAMMA, help="")
-    parser.add_argument("--tau"               , type=int, default=TAU, help="")
+    parser.add_argument("--gamma"             , type=float, default=0.99, help="discount factor for future rewards")
+    parser.add_argument("--tau"               , type=float, default=0.001, help="tau averaging for target network updating")
 
-    parser.add_argument("--lr_actor"          , type=int, default=LEARNING_RATE_ACTOR, help="")
-    parser.add_argument("--lr_critic"         , type=int, default=LEARNING_RATE_CRITIC, help="")
-    parser.add_argument("--l1_size"           , type=int, default=L1_SIZE, help="")
-    parser.add_argument("--l2_size"           , type=int, default=L2_SIZE, help="")
+    parser.add_argument("--lr_actor"          , type=float, default=1E-4, help="")
+    parser.add_argument("--lr_critic"         , type=float, default=1E-3, help="")
+    parser.add_argument("--l1_size"           , type=int, default=400, help="")
+    parser.add_argument("--l2_size"           , type=int, default=300, help="")
 
-    parser.add_argument("--ou_noise_theta"    , type=int, default=OU_NOISE_THETA, help="")
-    parser.add_argument("--ou_noise_sigma"    , type=int, default=OU_NOISE_SIGMA, help="")
-    parser.add_argument("--ou_noise_decay"    , type=int, default=OU_NOISE_SIGMA_DECAY_PER_EPS, help="")
-    parser.add_argument("--min_ou_noise_sigma", type=int, default=MIN_OU_NOISE_SIGMA, help="")
+    parser.add_argument("--ou_noise_theta"    , type=float, default=0.15, help="")
+    parser.add_argument("--ou_noise_sigma"    , type=float, default=0.2, help="")
+    parser.add_argument("--ou_noise_decay"    , type=float, default=0.0, help="")
+    parser.add_argument("--min_ou_noise_sigma", type=float, default=0.15, help="")
+
     opt = parser.parse_args()
     print(opt)
 
     MAX_EPISODES                = opt.max_episodes
     MEM_SIZE                    = opt.mem_size
     MEMORY_MIN                  = opt.mem_min
+    FILL_MEM_SIZE               = opt.fill_mem_size
     BATCH_SIZE                  = opt.batch_size
 
     GAMMA                       = opt.gamma
@@ -378,12 +334,17 @@ if __name__ == "__main__":
     OU_NOISE_SIGMA_DECAY_PER_EPS= opt.ou_noise_decay
     MIN_OU_NOISE_SIGMA          = opt.min_ou_noise_sigma
 
+    PRINT_DATA                  = 50  # how often to print data
+    SAVE_FREQ                   = int(round(MAX_EPISODES/10)) # How often to save networks
+    DEMONSTRATE_INTERVAL        = 100000*PRINT_DATA
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device is ", device)
 
     if not opt.load_from:
-        run_batch_experiments(1, opt)
+        ddpg = DDPG(opt)
+        ddpg.train()
+        ddpg.save_experiment("finished_" + opt.exp_name + str(exp_num))
 
     else:
         # use this to save or load networks
