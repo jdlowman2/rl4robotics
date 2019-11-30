@@ -1,3 +1,4 @@
+import sklearn.preprocessing
 import numpy as np
 import random
 import time
@@ -19,11 +20,15 @@ MAX_EPISODES = 10000
 MAX_STEPS_PER_EP = 1000
 TEST_FREQUENCY = 100
 TEST_EPISODES = 100
-GAMMA = 0.9        # discount factor
-LR = 1E-3
+GAMMA = 0.9           # discount factor
+LR = 1E-3             # Learning Rate
 N_HIDDEN = 128
-PRINT_DATA = 5     # how often to print data
-RENDER_GAME = False # View the Episode. 
+PRINT_DATA = 1        # how often to print data
+RENDER_GAME = False   # View the Episode. 
+
+ENVIRONMENT = "MountainCarContinuous-v0"
+# ENVIRONMENT = "Pendulum-v0"
+# ENVIRONMENT = "LunarLanderContinuous-v2"
 ######################################################################
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -66,6 +71,18 @@ class A2C:
         self.data = {"loss": []}
         self.start_time = None
 
+    # Normalize / Standardize the inputs for faster model convergence. 
+    # Randomly generate oberservations and use them to train a scaler. 
+    # Referenced from - Reinforcement Learning Cookbook. 
+    def initialize_scale_state(self):
+        state_space_samples = np.array([self.env.observation_space.sample() for x in range(int(1E4))])
+        self.scaler = sklearn.preprocessing.StandardScaler()
+        self.scaler.fit(state_space_samples)
+
+    def scale_state(self, state):
+        scaled = self.scaler.transform([state])
+        return scaled[0]
+
     def select_action(self, state):
         dist, value = self.model(torch.Tensor(state)) 
         action = dist.sample().numpy()
@@ -87,7 +104,7 @@ class A2C:
         Qvals = (Qvals - Qvals.mean()) / (Qvals.std() + 1e-9)
 
         loss = 0
-        for Qval, log_prob, value in zip(Qvals, log_probs, values):
+        for log_prob, value, Qval in zip(log_probs, values, Qvals):
 
             advantage = Qval - value.item()
             actor_loss = -log_prob * advantage
@@ -95,10 +112,11 @@ class A2C:
             loss += critic_loss + actor_loss
 
         self.optimizer.zero_grad()
-        loss.backward(retain_graph=True)  # I'm still dealing with this issue, it slows me down. 
+        loss.backward(retain_graph=True)  # I'm still dealing with this issue, it slows me down for . 
         self.optimizer.step()
 
 
+    # Main training loop.
     def train(self):
 
         score = 0.0
@@ -106,6 +124,7 @@ class A2C:
         log_probs = []
         values = []
         total_rewards = []
+        self.initialize_scale_state()
 
         print("Going to be training for a total of {} episodes".format(MAX_EPISODES))
         self.start_time = time.time()
@@ -125,6 +144,7 @@ class A2C:
                 if RENDER_GAME and (e+1) % 25 ==0:
                     self.env.render()
 
+                state = self.scale_state(state)
                 action, log_prob, value = self.select_action(state)
                 state, reward, done, _ = self.env.step(action)
                 score += reward
@@ -205,8 +225,7 @@ class A2C:
                 w.writerow([key, val, "\n"])
 
 
+
 if __name__ == "__main__":
-    A2C = A2C("MountainCarContinuous-v0")
-    # A2C = A2C("Pendulum-v0")
-    # A2C = A2C("LunarLanderContinuous-v2")
+    A2C = A2C(ENVIRONMENT)
     A2C.train()
