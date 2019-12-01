@@ -18,14 +18,14 @@ class TestMemory(unittest.TestCase):
         mem = Memory(2)
 
         mem.push(start_seq)
-        self.assertTrue(mem.max_entry < mem.size)
+        self.assertTrue(mem.max_entry == 1)
         mem.push(s2)
-        self.assertTrue(mem.max_entry==mem.size-1)
+        self.assertTrue(mem.max_entry==2)
         mem.push(s3)
-        self.assertTrue(mem.max_entry==mem.size-1)
+        self.assertTrue(mem.max_entry==2)
 
-        self.assertTrue(mem.data[0] == s3)
-        self.assertTrue(mem.data[1] == s2)
+        self.assertTrue(mem.data[0] == s2)
+        self.assertTrue(mem.data[1] == s3)
 
         self.assertTrue(mem.data[0].state in mem.sample(2).state or\
                         mem.data[1].state in mem.sample(2).state)
