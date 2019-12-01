@@ -1,32 +1,36 @@
+import sklearn.preprocessing
 import numpy as np
+import random
 import time
 import gym
 
-from torch.distributions import Categorical
 from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.nn as nn
 import torch
 
-import sys
+import sys, time
+
+# LOL - Technically it works if you let it run for 1000 episodes, I'll look at it 
+# more later today. 
 
 ############################# PARAMETERS #############################
-
 MAX_EPISODES = 10000
-MAX_STEPS_PER_EP = 300
+MAX_STEPS_PER_EP = 1000
 TEST_FREQUENCY = 100
 TEST_EPISODES = 100
-GAMMA = 0.99        # discount factor
-LR_ACTOR = 5E-4
-LR_CRITIC = 5E-4
+GAMMA = 0.9           # discount factor
+LR = 1E-3             # Learning Rate
+N_HIDDEN = 128
+PRINT_DATA = 1        # how often to print data
+RENDER_GAME = False   # View the Episode. 
 
-PRINT_DATA = 5     # how often to print data
-RENDER_GAME = False # View the Episode. 
+ENVIRONMENT = "MountainCarContinuous-v0"
+# ENVIRONMENT = "Pendulum-v0"
+# ENVIRONMENT = "LunarLanderContinuous-v2"
 ######################################################################
 
-# use_cuda = torch.cuda.is_available()
-# print('use cuda : ', use_cuda)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using Device: ", device)
 
@@ -34,33 +38,26 @@ class Plotter():
     def __init__(self):
         self.data = []
 
-class Actor(nn.Module):
+class ActorCritic(nn.Module):
     def __init__(self, state_size, action_size):
-        super(Actor, self).__init__()
-        self.layer1 = nn.Linear(state_size, 16)
-        self.layer2 = nn.Linear(16, 16)
-        self.layer3 = nn.Linear(16, action_size.shape[0])
+        super(ActorCritic, self).__init__()
+        self.action_size = action_size
+        self.layer1 = nn.Linear(state_size, N_HIDDEN)
+        self.layer2 = nn.Linear(N_HIDDEN, N_HIDDEN)
+        self.layer3 = nn.Linear(N_HIDDEN, action_size)
+        self.value = nn.Linear(N_HIDDEN, 1)
+        self.to(device)
+
 
     def forward(self, x):
         x = F.relu(self.layer1(x))
         x = F.relu(self.layer2(x))
-        x = F.log_softmax(self.layer3(x), dim=-1)
-        return x
-
-class Critic(nn.Module):
-    def __init__(self, state_size):
-        super(Critic, self).__init__()
-        self.layer1 = nn.Linear(state_size, 16)
-        self.dp1 = nn.Dropout(p=0.5)
-        self.layer2 = nn.Linear(16, 8)
-        self.layer3 = nn.Linear(8, 1)
-
-    def forward(self, x):
-        x = F.relu(self.layer1(x))
-        x = self.dp1(x)
-        x = F.relu(self.layer2(x))
-        q_value = self.layer3(x)
-        return q_value
+        mu = 2 * torch.tanh(self.layer3(x))
+        sigma = F.softplus(self.layer3(x)) + 1E-5
+        n_output = self.action_size
+        distribution = torch.distributions.Normal(mu.view(self.action_size,).data, sigma.view(self.action_size,).data)
+        value = self.value(x)
+        return distribution, value
 
 
 class A2C:
@@ -68,55 +65,58 @@ class A2C:
         
         self.envname = envname
         self.env = gym.make(envname)
-        self.actor = Actor(self.env.observation_space.shape[0], self.env.action_space).to(device)
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=LR_ACTOR)
-        self.critic = Critic(self.env.observation_space.shape[0]).to(device)
-        self.critic_optimizer = optim.Adam(self.actor.parameters(), lr=LR_CRITIC)
-
-        # if use_cuda:
-        #     self.actor.cuda()
-        #     self.critic.cuda()
+        self.model = ActorCritic(self.env.observation_space.shape[0], self.env.action_space.shape[0]).to(device)
+        self.optimizer = optim.Adam(self.model.parameters(),LR)
 
         self.data = {"loss": []}
         self.start_time = None
 
+    # Normalize / Standardize the inputs for faster model convergence. 
+    # Randomly generate oberservations and use them to train a scaler. 
+    # Referenced from - Reinforcement Learning Cookbook. 
+    def initialize_scale_state(self):
+        state_space_samples = np.array([self.env.observation_space.sample() for x in range(int(1E4))])
+        self.scaler = sklearn.preprocessing.StandardScaler()
+        self.scaler.fit(state_space_samples)
+
+    def scale_state(self, state):
+        scaled = self.scaler.transform([state])
+        return scaled[0]
+
     def select_action(self, state):
-        state = torch.from_numpy(state).float().to(device)
-        log_probs = self.actor(state)
-        value = self.critic(state)
-        # action = torch.exp(log_probs).data.numpy()
-        action = torch.exp(log_probs).cpu().detach().numpy()
-        return action, log_probs.sum(dim=-1), value
+        dist, value = self.model(torch.Tensor(state)) 
+        action = dist.sample().numpy()
+        log_prob = dist.log_prob(action[0])
+        return action, log_prob, value
 
     def update_a2c(self, rewards, log_probs, values, state):
-        state = torch.from_numpy(state).float().to(device)
-        Qval = self.critic(state)
-        Qval = Qval.cpu().detach().numpy()
-        Qvals = np.zeros_like(values, dtype=np.float32)
-        for t in reversed(range(len(rewards))):
-            Qval = rewards[t] + GAMMA * Qval
-            Qvals[t] = Qval 
 
-        Qvals = torch.from_numpy(Qvals).float().to(device)
-        log_probs = torch.stack(log_probs).to(device)
-        values = torch.stack(values).to(device)
+        Qvals = []
+        Qval = 0
+        pw = 0
+        for reward in rewards[::-1]:
+            Qval += GAMMA ** pw * reward
+            pw += 1
+            Qvals.append(Qval)
 
-        advantage = Qvals - values
-        actor_loss = (-log_probs * advantage).mean()
-        critic_loss = (advantage**2).mean()
-        # critic_loss = F.mse_loss(advantage, torch.zeros_like(advantage))
+        Qvals = Qvals[::-1]
+        Qvals = torch.tensor(Qvals)
+        Qvals = (Qvals - Qvals.mean()) / (Qvals.std() + 1e-9)
 
-        self.actor_optimizer.zero_grad()
-        self.critic_optimizer.zero_grad()
+        loss = 0
+        for log_prob, value, Qval in zip(log_probs, values, Qvals):
 
-        actor_loss.backward(retain_graph=True)
-        critic_loss.backward(retain_graph=True)
-        # actor_loss.backward()
-        # critic_loss.backward()
+            advantage = Qval - value.item()
+            actor_loss = -log_prob * advantage
+            critic_loss = F.smooth_l1_loss(value[0], Qval)
+            loss += critic_loss + actor_loss
 
-        self.actor_optimizer.step()
-        self.critic_optimizer.step()
+        self.optimizer.zero_grad()
+        loss.backward(retain_graph=True)  # I'm still dealing with this issue, it slows me down for . 
+        self.optimizer.step()
 
+
+    # Main training loop.
     def train(self):
 
         score = 0.0
@@ -124,6 +124,7 @@ class A2C:
         log_probs = []
         values = []
         total_rewards = []
+        self.initialize_scale_state()
 
         print("Going to be training for a total of {} episodes".format(MAX_EPISODES))
         self.start_time = time.time()
@@ -131,12 +132,19 @@ class A2C:
             state = self.env.reset()
             score = 0.0
             step_num = 0
+
+            # To improve exploration, take inital actions sampled from random distirbution. 
+            action = torch.tensor([[2 * random.random() - 1]])
+            state, reward, done, _ = self.env.step(action)
+
             for t in range(MAX_STEPS_PER_EP):
+                
                 step_num += 1
 
                 if RENDER_GAME and (e+1) % 25 ==0:
                     self.env.render()
 
+                state = self.scale_state(state)
                 action, log_prob, value = self.select_action(state)
                 state, reward, done, _ = self.env.step(action)
                 score += reward
@@ -154,11 +162,11 @@ class A2C:
             if (e+1) % PRINT_DATA == 0:
                 print("Episode: {}, reward: {}, steps: {}".format(e+1, total_rewards[e], step_num))
 
-            if (e+1) % TEST_FREQUENCY == 0:
-                print("-"*10 + " testing now " + "-"*10)
-                mean_reward, std_reward = self.test(TEST_EPISODES,e)
-                print('Mean Reward Achieved : {}, Standard Deviation : {}'.format(mean_reward, std_reward))
-                print("-"*50)
+            # if (e+1) % TEST_FREQUENCY == 0:
+            #     print("-"*10 + " testing now " + "-"*10)
+            #     mean_reward, std_reward = self.test(TEST_EPISODES,e)
+            #     print('Mean Reward Achieved : {}, Standard Deviation : {}'.format(mean_reward, std_reward))
+            #     print("-"*50)
 
         self.env.close()
 
@@ -217,8 +225,7 @@ class A2C:
                 w.writerow([key, val, "\n"])
 
 
+
 if __name__ == "__main__":
-    # A2C = A2C("MountainCarContinuous-v0")
-    A2C = A2C("Pendulum-v0")
-    # A2C = A2C("LunarLanderContinuous-v2")
+    A2C = A2C(ENVIRONMENT)
     A2C.train()
