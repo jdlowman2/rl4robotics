@@ -108,6 +108,7 @@ class DDPG:
         self.memory = Memory(MEM_SIZE)
 
         self.start_time = time.time()
+        self.solved = None
 
     def random_fill_memory(self, num_eps):
         for episode in range(num_eps):
@@ -171,11 +172,23 @@ class DDPG:
                 print("\nAverage metric at iteration ", episode_num)
                 average, variance = self.compute_average_metric()
                 self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
+                self.check_if_solved(average, episode_num)
 
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
         print("Episode Scores: \n", episode_scores)
         self.env.close()
+
+    def check_if_solved(self, average, episode_num):
+        if "mountaincar" in self.envname.lower() and average > 90.0:
+            if self.solved is None:
+                self.solved = episode_num
+                print(self.envname, "solved after ", self.solved)
+
+        elif "lunarlander" in self.envname.lower() and average > 200.0:
+            if self.solved is None:
+                self.solved = episode_num
+                print(self.envname, "solved after ", self.solved)
 
     # mini-batch sample and update networks
     def update_networks(self):
@@ -317,6 +330,8 @@ if __name__ == "__main__":
     parser.add_argument("--ou_noise_decay"    , type=float, default=0.0, help="")
     parser.add_argument("--min_ou_noise_sigma", type=float, default=0.15, help="")
 
+    parser.add_argument("--save_freq", type=int, default=5000, help="")
+
     opt = parser.parse_args()
     print(opt)
 
@@ -340,7 +355,7 @@ if __name__ == "__main__":
     MIN_OU_NOISE_SIGMA          = opt.min_ou_noise_sigma
 
     PRINT_DATA                  = 50  # how often to print data
-    SAVE_FREQ                   = int(round(MAX_EPISODES/10)) # How often to save networks
+    SAVE_FREQ                   = opt.save_freq # How often to save networks
     DEMONSTRATE_INTERVAL        = 100000*PRINT_DATA
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
