@@ -8,19 +8,28 @@ import os
 
 import IPython
 
-total_num = "50000"
-envname = "LunarLanderContinuous-v2"
-foldername = "experiments/" + "Lander Defaults/"
-start_time = "11_28_10_0"
+# Change these values----------------
+foldername = "experiments/" + "Lander Converge/"
+save_intervals = list(range(0, 25001, 1000))
+render = False
+#------------------------------------
+
+environments = {"pen": "Pendulum-v0",
+                    "lun": "LunarLanderContinuous-v2",
+                    "mou": "MountainCarContinuous-v0",
+                    }
+save_filenames = [file for file in os.listdir(foldername) if "actor" in file]
+
+# assert(len(save_intervals) == len(save_filenames))
+file = save_filenames[0].split('_')
+total_num = file[3]
+exp_name = file[4]
+envname = environments[file[5].lower()]
+start_time = "_".join(file[-4:]).strip("actor")
+
+episodes_per_file = 100 # number of episodes to run. The mean and stdev will be computed over these
 L1_SIZE = 400
 L2_SIZE = 300
-
-render = False
-episodes_per_file = 100
-
-save_intervals = list(range(0, 30001, 5000))
-save_filenames = [file for file in os.listdir(foldername) if "actor" in file]
-assert(len(save_intervals) == len(save_filenames))
 
 env = gym.make(envname)
 
@@ -29,7 +38,7 @@ save_num_rewards = np.zeros((episodes_per_file, len(save_intervals)))
 for save_ind, save_num in enumerate(save_intervals):
     experiment_path = Path(foldername + "eps_"+\
                         str(save_num) + "_of_"+total_num+\
-                        "_defaults_" + envname[:3] +"_"+\
+                        "_" + exp_name + "_" + envname[:3] +"_"+\
                         start_time + "actor")
     print("Loading from ", experiment_path)
 
@@ -39,6 +48,7 @@ for save_ind, save_num in enumerate(save_intervals):
     actor.load_state_dict(torch.load(experiment_path))
 
     for ind, episode in enumerate(list(range(episodes_per_file))):
+        # print("Reset")
         state = env.reset()
         done = False
         rewards = 0.0
@@ -47,15 +57,16 @@ for save_ind, save_num in enumerate(save_intervals):
             if render:
                 env.render()
             action = actor.take_action(state, None)
-            state, reward, done, _ =env.step(action)
+            state, reward, done, _ = env.step(action)
             rewards += reward
+            # print("reward: ", reward, " action: ", action)
 
         save_num_rewards[ind, save_ind] = rewards
 
     assert(np.nonzero(save_num_rewards[:, save_ind])[0].shape[0] == save_num_rewards[:, save_ind].shape[0])
 
     print("\nTest across ", episodes_per_file, "after training for ", save_num, "episodes.")
-    print("\tMean: ", save_num_rewards[:, save_ind].mean(), " | Stdev: ", np.stdev(save_num_rewards[:, save_ind]))
+    print("\tMean: ", save_num_rewards[:, save_ind].mean(), " | Stdev: ", np.std(save_num_rewards[:, save_ind]))
     print("\n")
 
 env.close()
@@ -70,7 +81,7 @@ plt.ylabel("Rewards Per Episode for 100 Episodes")
 plt.legend()
 plt.tight_layout()
 # plt.show()
-plt.savefig(foldername + "training_eval"+ \
+plt.savefig(foldername +  foldername.split("/")[-2].lower().replace(" ", "_") + "_training_eval"+ \
         ".png", dpi=200)
 plt.close()
 
