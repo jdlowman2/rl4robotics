@@ -90,7 +90,7 @@ class ActorCritic(nn.Module):
         # I think that we could collect a batch of states during the running,
         #  and process them all at once at the end of each episode
 
-        batch_size = state.shape[1]
+        # batch_size = state.shape[0]
 
         state = torch.from_numpy(state).float().to(self.device)
         values = self.relu(self.critic_lin1(state))
@@ -106,9 +106,10 @@ class ActorCritic(nn.Module):
         action_dist = tdist.Normal(action_dist[0], action_dist[1])
 
         # want to sample as many actions as there are input states, i.e. actions.shape = (batch_size)
-        actions = action_dist.sample((batch_size,))
+        # actions = action_dist.sample((batch_size,))
+        action = action_dist.sample((1,))
 
-        return values, actions, action_dist
+        return values, action, action_dist
 
 
 class A2C:
