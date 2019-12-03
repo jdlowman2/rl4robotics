@@ -10,6 +10,7 @@ import sys
 
 import argparse
 from pathlib import Path
+import os
 
 import IPython
 
@@ -74,6 +75,13 @@ class DDPG:
     def __init__(self, opt):
         self.opt = opt
         self.start_time = time.time()
+        self.training_timesteps = 0
+        self.last_mean = 1E6
+        self.last_var = 1E6
+        self.update_params()
+        self.reset()
+
+    def update_params(self):
         self.parameters = {
             "Environment Name"            : opt.env_name,
             "MAX_EPISODES"                : MAX_EPISODES,
@@ -91,12 +99,11 @@ class DDPG:
             "L2_SIZE"                     : L2_SIZE,
             "OU_NOISE_SIGMA_DECAY_PER_EPS": OU_NOISE_SIGMA_DECAY_PER_EPS,
             "MIN_OU_NOISE_SIGMA"          : MIN_OU_NOISE_SIGMA,
-            "LastMeanError"               : 1E6,
-            "LastVarError"                : 1E6,
+            "LastMeanError"               : self.last_mean,
+            "LastVarError"                : self.last_var,
             "Training Timesteps"          : self.training_timesteps
             }
 
-        self.reset()
 
     def reset(self):
         self.envname = self.parameters["Environment Name"]
@@ -136,6 +143,8 @@ class DDPG:
             self.noise = NormalNoiseProcess(self.env.action_space)
         else:
             raise("Invalid noise type provided")
+
+        self.folder_name = opt.exp_name + self.name_suffix
         # self.initialize_scale_state()
 
     # def initialize_scale_state(self):
@@ -238,6 +247,9 @@ class DDPG:
                     round((time.time() - self.start_time), 2) )
         print("Episode Scores: \n", episode_scores)
         self.env.close()
+        ddpg.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES),
+                                save_critic=True)
+
         return True
 
     def check_if_solved(self, average, episode_num):
@@ -301,8 +313,8 @@ class DDPG:
         print("Evaluation over ", num_to_test, "episodes.\n\t",
                                 " Mean: ", rewards.mean(),
                                 " | Variance: ", rewards.var())
-        self.parameters["LastMeanError"] = rewards.mean()
-        self.parameters["LastVarError"] = rewards.var()
+        self.last_mean = rewards.mean()
+        self.last_var = rewards.var()
 
         return rewards.mean(), rewards.var()
 
@@ -325,14 +337,20 @@ class DDPG:
         self.env.reset()
         return rewards
 
-    def save_experiment(self, experiment_name=None, save_critic=False):
+    def save_experiment(self, experiment_name, save_critic=False):
+        self.update_params()
         experiment_name = experiment_name + "_" + self.opt.exp_name + self.name_suffix
 
-        torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "actor")
-        if save_critic:
-            torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "critic")
+        if self.folder_name not in os.listdir("experiments/"):
+            os.mkdir("experiments/" + self.folder_name)
+            print("made directory: ")
+        save_location = "experiments/" + self.folder_name + "/" + experiment_name
 
-        with open("experiments/" + experiment_name + ".csv", "w") as file:
+        torch.save(self.actor.state_dict(), save_location + "actor")
+        if save_critic:
+            torch.save(self.critic.state_dict(), save_location + "critic")
+
+        with open(save_location  + ".csv", "w") as file:
             w = csv.writer(file)
             for key, val in self.parameters.items():
                 w.writerow([key, val, "\n"])
@@ -449,7 +467,7 @@ if __name__ == "__main__":
         #         i+=1
         # else:
         is_trained = ddpg.train()
-        ddpg.save_experiment("finished_" + opt.exp_name, save_critic=True)
+
 
 
     else:
