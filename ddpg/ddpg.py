@@ -15,14 +15,15 @@ import IPython
 
 from memory import *
 from actor_critic_networks import *
-# from plotter import *
+# import sklearn.preprocessing
 
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
 
 # referenced from github.com/minimalrl
 class NoiseProcess:
-    def __init__(self, action_shape):
+    def __init__(self, action_space):
+        action_shape = action_space.shape
         self.theta = OU_NOISE_THETA
         self.sigma = OU_NOISE_SIGMA
         self.sigma_decay = OU_NOISE_SIGMA_DECAY_PER_EPS
@@ -43,13 +44,31 @@ class NoiseProcess:
     def decay(self):
         self.sigma = max(self.min_sigma, self.sigma - self.sigma_decay)
 
+class NormalNoiseProcess:
+    def __init__(self, action_space):
+        action_shape = action_space.shape
 
-# Run the agent 10 times every 100 episodes
-    # compute mean and standard dev across these iterations
-# Total reward during training (moving average)
-# Average episode length during training (moving average)
-# Speed of convergence:  how many episodes to get to "success reward" amount (defined for each environment.) (moving average)
-# Initialize algorithm 100 times and compare how many times it succeeds
+        self.mean   = np.zeros(action_shape)
+        self.sigma = NORMAL_VARIANCE
+        self.sigma_decay = NORMAL_DECAY_PER_EPS
+        self.min_sigma = MIN_NORMAL_NOISE_SIGMA
+
+    def sample(self):
+        return np.random.normal(loc = self.mean, scale=self.sigma, size=self.mean.shape)
+
+    def decay(self):
+        self.sigma = max(self.min_sigma, self.sigma - self.sigma_decay)
+
+def adjust_mountain_reward(state, reward):
+    # From https://medium.com/@ts1829/solving-mountain-car-with-q-learning-b77bf71b1de2
+    reward = state[0] + 0.5 # Adjust reward based on car position
+    if state[0] >= 0.5: # Adjust reward for task completion
+        reward += 1
+
+    return reward
+
+    # # https://github.com/Pechckin/MountainCar/blob/master/MountainCarContinuous-v0.py
+    # reward = reward + 100 * GAMMA * (abs(next_state[1]) - abs(state[1]))
 
 class DDPG:
     def __init__(self, opt):
@@ -70,23 +89,23 @@ class DDPG:
             "start time"                  : self.start_time,
             "L1_SIZE"                     : L1_SIZE,
             "L2_SIZE"                     : L2_SIZE,
-            "FILL_MEM_SIZE"               : FILL_MEM_SIZE,
-            "OU_NOISE_SIGMA_DECAY_PER_EPS":OU_NOISE_SIGMA_DECAY_PER_EPS,
+            "OU_NOISE_SIGMA_DECAY_PER_EPS": OU_NOISE_SIGMA_DECAY_PER_EPS,
             "MIN_OU_NOISE_SIGMA"          : MIN_OU_NOISE_SIGMA,
             "LastMeanError"               : 1E6,
             "LastVarError"                : 1E6,
+            "Training Timesteps"          : self.training_timesteps
             }
 
         self.reset()
 
     def reset(self):
         self.envname = self.parameters["Environment Name"]
-        self.env = gym.make(self.envname)
+        self.env = gym.make(self.parameters["Environment Name"])
         self.env.reset()
 
         t = time.localtime()
         if not self.opt.load_from:
-            self.name_suffix = "_" + self.envname[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
+            self.name_suffix = "_" + self.env.spec.id[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
                     str(t.tm_hour) + "_" + str(t.tm_min)
         else:
             self.name_suffix = self.opt.load_from
@@ -103,58 +122,96 @@ class DDPG:
         self.target_critic.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), LEARNING_RATE_ACTOR)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), LEARNING_RATE_CRITIC)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), LEARNING_RATE_CRITIC, weight_decay=0.01)
 
         self.memory = Memory(MEM_SIZE)
 
         self.start_time = time.time()
         self.solved = None
+        self.training_timesteps = 0
 
-    def random_fill_memory(self, num_eps):
-        for episode in range(num_eps):
+        if opt.noise_type == "ou":
+            self.noise = NoiseProcess(self.env.action_space)
+        elif opt.noise_type == "normal":
+            self.noise = NormalNoiseProcess(self.env.action_space)
+        else:
+            raise("Invalid noise type provided")
+        # self.initialize_scale_state()
+
+    # def initialize_scale_state(self):
+    #     state_space_samples = np.array([self.env.observation_space.sample() for x in range(int(1E4))])
+    #     self.scaler = sklearn.preprocessing.StandardScaler().fit(state_space_samples)
+
+    # def scale_state(self, state):
+    #     scaled = self.scaler.transform([state])
+    #     return scaled[0]
+
+    def fill_memory(self):
+        steps = 0
+        while steps < self.opt.mem_min:
             state = self.env.reset()
             done = False
+
             while not done:
-                action = self.env.action_space.sample()
+                noise_to_add = self.noise.sample()
+                action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
+
+                # Referenced from Reinforcement Learning Cookbook
+                # next_state = self.scale_state(next_state)
+
+                # Reward shaping for mountain car
+                if "mountain" in self.env.spec.id.lower():
+                    reward = adjust_mountain_reward(state, reward)
 
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
-                state = next_state
 
-        print("Number of sequences added to memory: ", self.memory.max_entry)
+                state = next_state
+                steps += 1
 
     # main training loop
     def train(self):
         print("Starting job: \n", self.parameters)
 
-        self.random_fill_memory(FILL_MEM_SIZE) # get some random transitions for the memory buffer
         episode_scores = []
         actor_loss, critic_loss = torch.tensor(1E6), torch.tensor(1E6)
 
-        for episode_num in range(MAX_EPISODES):
-            noise = NoiseProcess(self.env.action_space.shape)
+        self.fill_memory()
+        self.training_timesteps = 0
 
+        for episode_num in range(MAX_EPISODES):
+
+            # state = self.scale_state(self.env.reset())
             state = self.env.reset()
             done = False
             step_scores = []
 
             while not done:
-                noise_to_add = noise.sample()
+                self.training_timesteps += 1
+                noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
+
+                # Referenced from Reinforcement Learning Cookbook
+                # next_state = self.scale_state(next_state)
+
+                # Reward shaping for mountain car
+                if "mountain" in self.env.spec.id.lower():
+                    reward = adjust_mountain_reward(state, reward)
+
+                step_scores.append(float(reward))
 
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
 
-                step_scores.append(float(reward))
                 state = next_state
 
                 if self.memory.max_entry > MEMORY_MIN:
                     actor_loss, critic_loss = self.update_networks()
 
             episode_scores.append(sum(step_scores))
-            noise.decay()
+            self.noise.decay()
 
             if episode_num % PRINT_DATA == 0:
                 average_episode_score = sum(episode_scores[-PRINT_DATA:])/float(PRINT_DATA)
@@ -166,7 +223,7 @@ class DDPG:
                       )
                 print("Actor loss: ", actor_loss.detach().numpy().round(4).item(),
                         "critic_loss: ", critic_loss.detach().numpy().round(4).item())
-                print("Noise sigma: ", noise.sigma)
+                print("Noise sigma: ", self.noise.sigma)
 
             if episode_num % SAVE_FREQ == 0:
                 print("\nAverage metric at iteration ", episode_num)
@@ -174,21 +231,25 @@ class DDPG:
                 self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
                 self.check_if_solved(average, episode_num)
 
+                if "mountain" in self.env.spec.id.lower() and abs(average) < 1E-12:
+                    return False
+
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
         print("Episode Scores: \n", episode_scores)
         self.env.close()
+        return True
 
     def check_if_solved(self, average, episode_num):
-        if "mountaincar" in self.envname.lower() and average > 90.0:
+        if "mountaincar" in self.env.spec.id.lower() and average > 90.0:
             if self.solved is None:
                 self.solved = episode_num
-                print(self.envname, "solved after ", self.solved)
+                print(self.env.spec.id, "solved after ", self.solved)
 
-        elif "lunarlander" in self.envname.lower() and average > 200.0:
+        elif "lunarlander" in self.env.spec.id.lower() and average > 200.0:
             if self.solved is None:
                 self.solved = episode_num
-                print(self.envname, "solved after ", self.solved)
+                print(self.env.spec.id, "solved after ", self.solved)
 
     # mini-batch sample and update networks
     def update_networks(self):
@@ -208,13 +269,13 @@ class DDPG:
         # update critic network
         self.critic.train()
         self.critic_optimizer.zero_grad()
-        critic_loss = F.mse_loss(critic_q, target_q)
+        critic_loss = F.mse_loss(critic_q, target_q) # should be divided by batch size?
         critic_loss.backward()
         self.critic_optimizer.step()
 
         self.critic.eval()
         self.actor_optimizer.zero_grad()
-        actor_a = self.actor(batch.state)
+        actor_a = self.actor(batch.state) # should this come after .train mode?
         self.actor.train()
         actor_loss = -self.critic(batch.state, actor_a).mean() # gradient ascent for highest Q value
         actor_loss.backward()
@@ -247,6 +308,7 @@ class DDPG:
 
     def demonstrate(self, render=True):
         state = self.env.reset()
+        # state = self.scale_state(self.env.reset())
         done = False
         rewards = 0.0
 
@@ -254,17 +316,21 @@ class DDPG:
             if render:
                 self.env.render()
             action = self.actor.take_action(state, None)
-            state, reward, done, _ = self.env.step(action)
-            rewards += reward
+            next_state, reward, done, _ = self.env.step(action)
+            # next_state = self.scale_state(next_state)
+            rewards += reward # this will be the OpenAI defined reward
+
+            state = next_state
 
         self.env.reset()
         return rewards
 
-    def save_experiment(self, experiment_name=None):
+    def save_experiment(self, experiment_name=None, save_critic=False):
         experiment_name = experiment_name + "_" + self.opt.exp_name + self.name_suffix
 
         torch.save(self.actor.state_dict(), "experiments/" + experiment_name + "actor")
-        torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "critic")
+        if save_critic:
+            torch.save(self.critic.state_dict(), "experiments/" + experiment_name + "critic")
 
         with open("experiments/" + experiment_name + ".csv", "w") as file:
             w = csv.writer(file)
@@ -314,7 +380,6 @@ if __name__ == "__main__":
     parser.add_argument("--max_episodes"      , type=int, default=50000, help="total number of episodes to train")
     parser.add_argument("--mem_min"           , type=int, default=int(2E3), help="minimum size of replay memory before updating actor and critic networks")
     parser.add_argument("--mem_size"          , type=int, default=int(1E6), help="total size of replay memory")
-    parser.add_argument("--fill_mem_size"     , type=int, default=100, help="number of episodes to run with random action to fill replay memory")
     parser.add_argument("--batch_size"        , type=int, default=64, help="batch size when sampling from replay memory")
 
     parser.add_argument("--gamma"             , type=float, default=0.99, help="discount factor for future rewards")
@@ -325,10 +390,16 @@ if __name__ == "__main__":
     parser.add_argument("--l1_size"           , type=int, default=400, help="")
     parser.add_argument("--l2_size"           , type=int, default=300, help="")
 
+    parser.add_argument("--noise_type"        , type=str, default="ou", help="")
+
     parser.add_argument("--ou_noise_theta"    , type=float, default=0.15, help="")
     parser.add_argument("--ou_noise_sigma"    , type=float, default=0.2, help="")
     parser.add_argument("--ou_noise_decay"    , type=float, default=0.0, help="")
     parser.add_argument("--min_ou_noise_sigma", type=float, default=0.15, help="")
+
+    parser.add_argument("--normal_noise_var"  , type=float, default=0.2, help="")
+    parser.add_argument("--normal_noise_decay", type=float, default=0.0, help="")
+    parser.add_argument("--min_normal_noise"  , type=float, default=0.2, help="")
 
     parser.add_argument("--save_freq", type=int, default=5000, help="")
 
@@ -338,7 +409,6 @@ if __name__ == "__main__":
     MAX_EPISODES                = opt.max_episodes
     MEM_SIZE                    = opt.mem_size
     MEMORY_MIN                  = opt.mem_min
-    FILL_MEM_SIZE               = opt.fill_mem_size
     BATCH_SIZE                  = opt.batch_size
 
     GAMMA                       = opt.gamma
@@ -354,6 +424,10 @@ if __name__ == "__main__":
     OU_NOISE_SIGMA_DECAY_PER_EPS= opt.ou_noise_decay
     MIN_OU_NOISE_SIGMA          = opt.min_ou_noise_sigma
 
+    NORMAL_VARIANCE             = opt.normal_noise_var
+    NORMAL_DECAY_PER_EPS        = opt.normal_noise_decay
+    MIN_NORMAL_NOISE_SIGMA      = opt.min_normal_noise
+
     PRINT_DATA                  = 50  # how often to print data
     SAVE_FREQ                   = opt.save_freq # How often to save networks
     DEMONSTRATE_INTERVAL        = 100000*PRINT_DATA
@@ -364,8 +438,19 @@ if __name__ == "__main__":
     ddpg = DDPG(opt)
 
     if not opt.load_from:
-        ddpg.train()
-        ddpg.save_experiment("finished_" + opt.exp_name + str(exp_num))
+        is_trained = False
+        # if "mountain" in opt.env_name.lower():
+        #     i = 0
+        #     while not is_trained:
+        #         ddpg = DDPG(opt)
+        #         is_trained = ddpg.train()
+        #         print("iteration: ", i)
+        #         print("Finished iteration ", i)
+        #         i+=1
+        # else:
+        is_trained = ddpg.train()
+        ddpg.save_experiment("finished_" + opt.exp_name, save_critic=True)
+
 
     else:
         # Use this to save or load networks. Assumes you are loading from experiments/ subdirectory.
