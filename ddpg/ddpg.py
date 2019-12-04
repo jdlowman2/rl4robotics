@@ -161,7 +161,9 @@ class DDPG:
             state = self.env.reset()
             done = False
 
-            while not done:
+            ep_steps = 0
+            while not done and ep_steps < self.env._max_episode_steps:
+                ep_steps += 1
                 noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
@@ -196,7 +198,9 @@ class DDPG:
             done = False
             step_scores = []
 
-            while not done:
+            ep_steps = 0
+            while not done and ep_steps < self.env._max_episode_steps:
+                ep_steps += 1
                 self.training_timesteps += 1
                 noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
@@ -324,7 +328,9 @@ class DDPG:
         done = False
         rewards = 0.0
 
-        while not done:
+        ep_steps = 0
+        while not done and ep_steps < self.env._max_episode_steps:
+            ep_steps += 1
             if render:
                 self.env.render()
             action = self.actor.take_action(state, None)
