@@ -73,7 +73,7 @@ class Critic(torch.nn.Module):
 
     def forward(self, x, a):
         layer1_out = self.layer1(x)
-        layer1_bn = F.relu(self.bn1(layer1_out))
+        layer1_bn = F.relu(layer1_out)
 
         layer2_out = self.layer2(torch.cat([layer1_bn, a], dim=1))
         layer2_bn = F.relu(layer2_out)
