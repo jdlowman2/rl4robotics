@@ -196,7 +196,9 @@ class DDPG:
                 test_episode_rewards["mean"].append(average)
                 test_episode_rewards["var"].append(variance)
 
-                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes))
+                save_actor_now = episode_num%self.opt.save_actor_freq == 0
+                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
+                                                save_actor=save_actor_now)
                 self.check_if_solved(average, episode_num)
 
                 if "mountain" in self.env.spec.id.lower() and abs(average) < 1E-12:
@@ -206,8 +208,8 @@ class DDPG:
                     round((time.time() - self.start_time), 2) )
         print("Episode Scores: \n", training_episode_rewards)
         self.env.close()
-        ddpg.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
-                                training_episode_rewards, test_episode_rewards, save_critic=True, )
+        ddpg.save_experiment("eps_"+str(self.opt.max_episodes) + "_of_"+str(self.opt.max_episodes),
+                                training_episode_rewards, test_episode_rewards, save_actor=True, save_critic=True, )
 
         return True
 
@@ -291,6 +293,7 @@ class DDPG:
     def save_experiment(self, experiment_name,
                             training_episode_rewards=None,
                             test_episode_rewards=None,
+                            save_actor=False,
                             save_critic=False):
 
         self.update_params()
@@ -301,7 +304,8 @@ class DDPG:
             print("made directory: ")
         save_location = "experiments/" + self.folder_name + "/" + experiment_name
 
-        torch.save(self.actor.state_dict(), save_location + "actor")
+        if save_actor:
+            torch.save(self.actor.state_dict(), save_location + "actor")
         if save_critic:
             torch.save(self.critic.state_dict(), save_location + "critic")
 
@@ -365,6 +369,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--save_freq", type=int, default=10, help="")
     parser.add_argument("--print_freq", type=int, default=50, help="")
+    parser.add_argument("--save_actor_freq", type=int, default=500, help="")
 
     opt = parser.parse_args()
     print(opt)
