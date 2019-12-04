@@ -124,6 +124,7 @@ class DDPG:
                 ep_steps += 1
                 noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
+                # action = self.env.action_space.sample()
                 next_state, reward, done, _ = self.env.step(action)
 
                 # Reward shaping for mountain car
@@ -174,6 +175,9 @@ class DDPG:
             episode_scores.append(sum(step_scores))
             self.noise.decay()
 
+            print("Episode: ", episode_num, " / ", self.opt.max_episodes,
+                  " | Score: ", np.array(sum(step_scores)).round(4))
+
             if episode_num % self.opt.print_freq == 0:
                 average_episode_score = sum(episode_scores[-self.opt.print_freq:])/float(self.opt.print_freq)
                 print("\nEpisode: ", episode_num, " / ", self.opt.max_episodes,
@@ -218,20 +222,21 @@ class DDPG:
     def update_networks(self):
         batch = self.memory.sample(self.opt.batch_size)
 
-        with torch.no_grad():
+        with torch.no_grad(): # Don't need gradient for target networks
             target_q = batch.reward + self.opt.gamma * torch.mul(\
                                 self.target_critic(batch.next_state,
                                     self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
-        self.critic_optimizer.zero_grad()
         critic_q = self.critic(batch.state, batch.action)
         critic_loss = F.mse_loss(critic_q, target_q)
+
+        self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
+        actor_loss = -self.critic(batch.state, self.actor(batch.state)).mean() # gradient ascent for highest Q value
+
         self.actor_optimizer.zero_grad()
-        actor_a = self.actor(batch.state)
-        actor_loss = -self.critic(batch.state, actor_a).mean() # gradient ascent for highest Q value
         actor_loss.backward()
         self.actor_optimizer.step()
 
@@ -261,7 +266,6 @@ class DDPG:
 
     def demonstrate(self, render=True):
         state = self.env.reset()
-        # state = self.scale_state(self.env.reset())
         done = False
         rewards = 0.0
 
