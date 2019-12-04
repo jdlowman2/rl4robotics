@@ -16,6 +16,7 @@ import IPython
 
 from memory import *
 from actor_critic_networks import *
+from read_params_from_file import *
 # import sklearn.preprocessing
 
 Sequence = namedtuple("Sequence", \
@@ -168,9 +169,6 @@ class DDPG:
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
-                # Referenced from Reinforcement Learning Cookbook
-                # next_state = self.scale_state(next_state)
-
                 # Reward shaping for mountain car
                 if "mountain" in self.env.spec.id.lower():
                     reward = adjust_mountain_reward(state, reward)
@@ -276,16 +274,15 @@ class DDPG:
         self.target_critic.eval()
         self.critic.eval()
 
-        target_actor_a       = self.target_actor(batch.next_state) # This should be batch.next_state
-        critic_q             = self.critic(batch.state, batch.action)
-        target_critic_next_q = self.target_critic(batch.next_state, target_actor_a)
-
-        target_q = batch.reward + GAMMA * torch.mul(target_critic_next_q, (~batch.done).float())
+        target_q = batch.reward + GAMMA * torch.mul(\
+                            self.target_critic(batch.next_state,
+                                self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
         # update critic network
         self.critic.train()
+        critic_q = self.critic(batch.state, batch.action)
         self.critic_optimizer.zero_grad()
-        critic_loss = F.mse_loss(critic_q, target_q) # should be divided by batch size?
+        critic_loss = F.mse_loss(critic_q, target_q)
         critic_loss.backward()
         self.critic_optimizer.step()
 
@@ -376,24 +373,6 @@ class DDPG:
         self.target_critic.load_state_dict(self.critic.state_dict())
 
 
-def read_params_from_file(opt):
-    load_from = opt.load_from
-    print("Filename: \n\t", "experiments/" + load_from + ".csv")
-    with open("experiments/" + load_from + ".csv", "r") as file:
-        reader = csv.reader(file)
-        params = dict()
-        for row in reader:
-            try:
-                params[row[0]] = int(row[1])
-            except ValueError:
-                try:
-                    params[row[0]] = float(row[1])
-                except ValueError:
-                    params[row[0]] = row[1]
-
-        return params
-
-
 if __name__ == "__main__":
     ## Parameters ##
     parser = argparse.ArgumentParser()
@@ -462,19 +441,7 @@ if __name__ == "__main__":
     ddpg = DDPG(opt)
 
     if not opt.load_from:
-        is_trained = False
-        # if "mountain" in opt.env_name.lower():
-        #     i = 0
-        #     while not is_trained:
-        #         ddpg = DDPG(opt)
-        #         is_trained = ddpg.train()
-        #         print("iteration: ", i)
-        #         print("Finished iteration ", i)
-        #         i+=1
-        # else:
-        is_trained = ddpg.train()
-
-
+        ddpg.train()
 
     else:
         # Use this to save or load networks. Assumes you are loading from experiments/ subdirectory.
