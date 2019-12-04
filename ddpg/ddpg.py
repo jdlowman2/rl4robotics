@@ -24,12 +24,12 @@ Sequence = namedtuple("Sequence", \
 
 # referenced from github.com/minimalrl
 class NoiseProcess:
-    def __init__(self, action_space):
-        action_shape = action_space.shape
-        self.theta = OU_NOISE_THETA
-        self.sigma = OU_NOISE_SIGMA
-        self.sigma_decay = OU_NOISE_SIGMA_DECAY_PER_EPS
-        self.min_sigma = MIN_OU_NOISE_SIGMA
+    def __init__(self, action_space, theta,sigma,decay,min_sigma):
+        action_shape     = action_space.shape
+        self.theta       = theta
+        self.sigma       = sigma
+        self.sigma_decay = decay
+        self.min_sigma   = min_sigma
 
         self.dt = 0.01
 
@@ -47,13 +47,13 @@ class NoiseProcess:
         self.sigma = max(self.min_sigma, self.sigma - self.sigma_decay)
 
 class NormalNoiseProcess:
-    def __init__(self, action_space):
+    def __init__(self, action_space, var, decay, min_sigma):
         action_shape = action_space.shape
 
         self.mean   = np.zeros(action_shape)
-        self.sigma = NORMAL_VARIANCE
-        self.sigma_decay = NORMAL_DECAY_PER_EPS
-        self.min_sigma = MIN_NORMAL_NOISE_SIGMA
+        self.sigma = var
+        self.sigma_decay = decay
+        self.min_sigma = min_sigma
 
     def sample(self):
         return np.random.normal(loc = self.mean, scale=self.sigma, size=self.mean.shape)
@@ -70,7 +70,7 @@ def adjust_mountain_reward(state, reward):
     return reward
 
     # # https://github.com/Pechckin/MountainCar/blob/master/MountainCarContinuous-v0.py
-    # reward = reward + 100 * GAMMA * (abs(next_state[1]) - abs(state[1]))
+    # reward = reward + 100 * self.opt.gamma * (abs(next_state[1]) - abs(state[1]))
 
 class DDPG:
     def __init__(self, opt):
@@ -85,21 +85,21 @@ class DDPG:
     def update_params(self):
         self.parameters = {
             "Environment Name"            : opt.env_name,
-            "MAX_EPISODES"                : MAX_EPISODES,
-            "MEM_SIZE"                    : MEM_SIZE,
-            "MEMORY_MIN"                  : MEMORY_MIN,
-            "BATCH_SIZE"                  : BATCH_SIZE,
-            "GAMMA"                       : GAMMA,
-            "TAU"                         : TAU,
-            "LEARNING_RATE_ACTOR"         : LEARNING_RATE_ACTOR,
-            "LEARNING_RATE_CRITIC"        : LEARNING_RATE_CRITIC,
-            "OU_NOISE_THETA"              : OU_NOISE_THETA,
-            "OU_NOISE_SIGMA"              : OU_NOISE_SIGMA,
+            "MAX_EPISODES"                : self.opt.max_episodes,
+            "MEM_SIZE"                    : self.opt.mem_size,
+            "MEMORY_MIN"                  : self.opt.mem_min,
+            "BATCH_SIZE"                  : self.opt.batch_size,
+            "GAMMA"                       : self.opt.gamma,
+            "TAU"                         : self.opt.tau,
+            "LEARNING_RATE_ACTOR"         : self.opt.lr_actor,
+            "LEARNING_RATE_CRITIC"        : self.opt.lr_critic,
+            "OU_NOISE_THETA"              : self.opt.ou_noise_theta,
+            "OU_NOISE_SIGMA"              : self.opt.ou_noise_sigma,
             "start time"                  : self.start_time,
-            "L1_SIZE"                     : L1_SIZE,
-            "L2_SIZE"                     : L2_SIZE,
-            "OU_NOISE_SIGMA_DECAY_PER_EPS": OU_NOISE_SIGMA_DECAY_PER_EPS,
-            "MIN_OU_NOISE_SIGMA"          : MIN_OU_NOISE_SIGMA,
+            "L1_SIZE"                     : self.opt.l1_size,
+            "L2_SIZE"                     : self.opt.l2_size,
+            "OU_NOISE_SIGMA_DECAY_PER_EPS": self.opt.ou_noise_decay,
+            "MIN_OU_NOISE_SIGMA"          : self.opt.min_ou_noise_sigma,
             "LastMeanError"               : self.last_mean,
             "LastVarError"                : self.last_var,
             "Training Timesteps"          : self.training_timesteps
@@ -121,27 +121,34 @@ class DDPG:
         obs_size    = self.env.observation_space.shape[0]
         action_size = self.env.action_space.shape[0]
 
-        self.actor        = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
-        self.critic       = Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
+        self.actor        = Actor(obs_size, self.env.action_space, self.opt.l1_size, self.opt.l2_size)
+        self.critic       = Critic(obs_size, action_size, self.opt.l1_size, self.opt.l2_size)
 
-        self.target_actor = Actor(obs_size, self.env.action_space, L1_SIZE, L2_SIZE)
+        self.target_actor = Actor(obs_size, self.env.action_space, self.opt.l1_size, self.opt.l2_size)
         self.target_actor.load_state_dict(self.actor.state_dict())
-        self.target_critic= Critic(obs_size, action_size, L1_SIZE, L2_SIZE)
+        self.target_critic= Critic(obs_size, action_size, self.opt.l1_size, self.opt.l2_size)
         self.target_critic.load_state_dict(self.critic.state_dict())
 
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), LEARNING_RATE_ACTOR)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), LEARNING_RATE_CRITIC, weight_decay=0.01)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), self.opt.lr_actor)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), self.opt.lr_critic, weight_decay=0.01)
 
-        self.memory = Memory(MEM_SIZE)
+        self.memory = Memory(self.opt.mem_size)
 
         self.start_time = time.time()
         self.solved = None
         self.training_timesteps = 0
 
         if opt.noise_type == "ou":
-            self.noise = NoiseProcess(self.env.action_space)
+            self.noise = NoiseProcess(self.env.action_space,
+                                        self.opt.ou_noise_theta,
+                                        self.opt.ou_noise_sigma,
+                                        self.opt.ou_noise_decay,
+                                        self.opt.min_ou_noise_sigma)
         elif opt.noise_type == "normal":
-            self.noise = NormalNoiseProcess(self.env.action_space)
+            self.noise = NormalNoiseProcess(self.env.action_space,
+                                             self.opt.normal_noise_var,
+                                             self.opt.normal_noise_decay,
+                                             self.opt.min_normal_noise)
         else:
             raise("Invalid noise type provided")
 
@@ -189,7 +196,7 @@ class DDPG:
         self.fill_memory()
         self.training_timesteps = 0
 
-        for episode_num in range(MAX_EPISODES):
+        for episode_num in range(self.opt.max_episodes):
 
             # state = self.scale_state(self.env.reset())
             state = self.env.reset()
@@ -218,15 +225,15 @@ class DDPG:
 
                 state = next_state
 
-                if self.memory.max_entry > MEMORY_MIN:
+                if self.memory.max_entry > self.opt.mem_min:
                     actor_loss, critic_loss = self.update_networks()
 
             episode_scores.append(sum(step_scores))
             self.noise.decay()
 
-            if episode_num % PRINT_DATA == 0:
-                average_episode_score = sum(episode_scores[-PRINT_DATA:])/float(PRINT_DATA)
-                print("\nEpisode: ", episode_num, " / ", MAX_EPISODES,
+            if episode_num % self.opt.print_data == 0:
+                average_episode_score = sum(episode_scores[-self.opt.print_data:])/float(self.opt.print_data)
+                print("\nEpisode: ", episode_num, " / ", self.opt.max_episodes,
                       " | Avg Score: ",
                       np.array(average_episode_score).round(4),
                       " | Elapsed time [s]: ",
@@ -236,10 +243,10 @@ class DDPG:
                         "critic_loss: ", critic_loss.detach().numpy().round(4).item())
                 print("Noise sigma: ", self.noise.sigma)
 
-            if episode_num % SAVE_FREQ == 0:
+            if episode_num % self.opt.save_freq == 0:
                 print("\nAverage metric at iteration ", episode_num)
                 average, variance = self.compute_average_metric()
-                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES))
+                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes))
                 self.check_if_solved(average, episode_num)
 
                 if "mountain" in self.env.spec.id.lower() and abs(average) < 1E-12:
@@ -249,7 +256,7 @@ class DDPG:
                     round((time.time() - self.start_time), 2) )
         print("Episode Scores: \n", episode_scores)
         self.env.close()
-        ddpg.save_experiment("eps_"+str(episode_num) + "_of_"+str(MAX_EPISODES),
+        ddpg.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
                                 save_critic=True)
 
         return True
@@ -267,9 +274,9 @@ class DDPG:
 
     # mini-batch sample and update networks
     def update_networks(self):
-        batch = self.memory.sample(BATCH_SIZE)
+        batch = self.memory.sample(self.opt.batch_size)
 
-        target_q = batch.reward + GAMMA * torch.mul(\
+        target_q = batch.reward + self.opt.gamma * torch.mul(\
                             self.target_critic(batch.next_state,
                                 self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
@@ -287,10 +294,10 @@ class DDPG:
 
         # soft update
         for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
-            target_param.data.copy_(TAU * param.data + (1 - TAU) * target_param.data)
+            target_param.data.copy_(self.opt.tau * param.data + (1 - self.opt.tau) * target_param.data)
 
         for param, target_param in zip(self.actor.parameters(), self.target_actor.parameters()):
-            target_param.data.copy_(TAU * param.data + (1 - TAU) * target_param.data)
+            target_param.data.copy_(self.opt.tau * param.data + (1 - self.opt.tau) * target_param.data)
 
         return actor_loss, critic_loss
 
@@ -395,35 +402,11 @@ if __name__ == "__main__":
     parser.add_argument("--min_normal_noise"  , type=float, default=0.2, help="")
 
     parser.add_argument("--save_freq", type=int, default=5000, help="")
+    parser.add_argument("--print_data", type=int, default=50, help="")
+    parser.add_argument("--demonstrate_freq", type=int, default=5000, help="")
 
     opt = parser.parse_args()
     print(opt)
-
-    MAX_EPISODES                = opt.max_episodes
-    MEM_SIZE                    = opt.mem_size
-    MEMORY_MIN                  = opt.mem_min
-    BATCH_SIZE                  = opt.batch_size
-
-    GAMMA                       = opt.gamma
-    TAU                         = opt.tau
-
-    LEARNING_RATE_ACTOR         = opt.lr_actor
-    LEARNING_RATE_CRITIC        = opt.lr_critic
-    L1_SIZE                     = opt.l1_size
-    L2_SIZE                     = opt.l2_size
-
-    OU_NOISE_THETA              = opt.ou_noise_theta
-    OU_NOISE_SIGMA              = opt.ou_noise_sigma
-    OU_NOISE_SIGMA_DECAY_PER_EPS= opt.ou_noise_decay
-    MIN_OU_NOISE_SIGMA          = opt.min_ou_noise_sigma
-
-    NORMAL_VARIANCE             = opt.normal_noise_var
-    NORMAL_DECAY_PER_EPS        = opt.normal_noise_decay
-    MIN_NORMAL_NOISE_SIGMA      = opt.min_normal_noise
-
-    PRINT_DATA                  = 50  # how often to print data
-    SAVE_FREQ                   = opt.save_freq # How often to save networks
-    DEMONSTRATE_INTERVAL        = 100000*PRINT_DATA
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device is ", device)
