@@ -18,11 +18,9 @@ from memory import *
 from actor_critic_networks import *
 from noise_process import *
 from read_params_from_file import *
-# import sklearn.preprocessing
 
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
-
 
 def adjust_mountain_reward(state, reward):
     # From https://medium.com/@ts1829/solving-mountain-car-with-q-learning-b77bf71b1de2
@@ -32,8 +30,6 @@ def adjust_mountain_reward(state, reward):
 
     return reward
 
-    # # https://github.com/Pechckin/MountainCar/blob/master/MountainCarContinuous-v0.py
-    # reward = reward + 100 * self.opt.gamma * (abs(next_state[1]) - abs(state[1]))
 
 class DDPG:
     def __init__(self, opt):
@@ -116,15 +112,6 @@ class DDPG:
             raise("Invalid noise type provided")
 
         self.folder_name = opt.exp_name + self.name_suffix
-        # self.initialize_scale_state()
-
-    # def initialize_scale_state(self):
-    #     state_space_samples = np.array([self.env.observation_space.sample() for x in range(int(1E4))])
-    #     self.scaler = sklearn.preprocessing.StandardScaler().fit(state_space_samples)
-
-    # def scale_state(self, state):
-    #     scaled = self.scaler.transform([state])
-    #     return scaled[0]
 
     def fill_memory(self):
         steps = 0
@@ -149,7 +136,6 @@ class DDPG:
                 state = next_state
                 steps += 1
 
-    # main training loop
     def train(self):
         print("Starting job: \n", self.parameters)
 
@@ -160,8 +146,6 @@ class DDPG:
         self.training_timesteps = 0
 
         for episode_num in range(self.opt.max_episodes):
-
-            # state = self.scale_state(self.env.reset())
             state = self.env.reset()
             done = False
             step_scores = []
@@ -174,10 +158,6 @@ class DDPG:
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
 
-                # Referenced from Reinforcement Learning Cookbook
-                # next_state = self.scale_state(next_state)
-
-                # Reward shaping for mountain car
                 if "mountain" in self.env.spec.id.lower():
                     reward = adjust_mountain_reward(state, reward)
 
@@ -194,8 +174,8 @@ class DDPG:
             episode_scores.append(sum(step_scores))
             self.noise.decay()
 
-            if episode_num % self.opt.print_data == 0:
-                average_episode_score = sum(episode_scores[-self.opt.print_data:])/float(self.opt.print_data)
+            if episode_num % self.opt.print_freq == 0:
+                average_episode_score = sum(episode_scores[-self.opt.print_freq:])/float(self.opt.print_freq)
                 print("\nEpisode: ", episode_num, " / ", self.opt.max_episodes,
                       " | Avg Score: ",
                       np.array(average_episode_score).round(4),
@@ -204,7 +184,6 @@ class DDPG:
                       )
                 print("Actor loss: ", actor_loss.detach().numpy().round(4).item(),
                         "critic_loss: ", critic_loss.detach().numpy().round(4).item())
-                print("Noise sigma: ", self.noise.sigma)
 
             if episode_num % self.opt.save_freq == 0:
                 print("\nAverage metric at iteration ", episode_num)
@@ -239,9 +218,10 @@ class DDPG:
     def update_networks(self):
         batch = self.memory.sample(self.opt.batch_size)
 
-        target_q = batch.reward + self.opt.gamma * torch.mul(\
-                            self.target_critic(batch.next_state,
-                                self.target_actor(batch.next_state)), (~batch.done).float()).detach()
+        with torch.no_grad():
+            target_q = batch.reward + self.opt.gamma * torch.mul(\
+                                self.target_critic(batch.next_state,
+                                    self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
         self.critic_optimizer.zero_grad()
         critic_q = self.critic(batch.state, batch.action)
@@ -290,10 +270,10 @@ class DDPG:
             ep_steps += 1
             if render:
                 self.env.render()
+
             action = self.actor.take_action(state, None)
             next_state, reward, done, _ = self.env.step(action)
-            # next_state = self.scale_state(next_state)
-            rewards += reward # this will be the OpenAI defined reward
+            rewards += reward
 
             state = next_state
 
@@ -365,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_normal_noise"  , type=float, default=0.2, help="")
 
     parser.add_argument("--save_freq", type=int, default=5000, help="")
-    parser.add_argument("--print_data", type=int, default=50, help="")
+    parser.add_argument("--print_freq", type=int, default=50, help="")
     parser.add_argument("--demonstrate_freq", type=int, default=5000, help="")
 
     opt = parser.parse_args()
