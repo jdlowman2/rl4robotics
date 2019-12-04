@@ -269,31 +269,21 @@ class DDPG:
     def update_networks(self):
         batch = self.memory.sample(BATCH_SIZE)
 
-        # modes for batch norm layers
-        self.target_actor.eval()
-        self.target_critic.eval()
-        self.critic.eval()
-
         target_q = batch.reward + GAMMA * torch.mul(\
                             self.target_critic(batch.next_state,
                                 self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
-        # update critic network
-        self.critic.train()
-        critic_q = self.critic(batch.state, batch.action)
         self.critic_optimizer.zero_grad()
+        critic_q = self.critic(batch.state, batch.action)
         critic_loss = F.mse_loss(critic_q, target_q)
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        self.critic.eval()
         self.actor_optimizer.zero_grad()
-        actor_a = self.actor(batch.state) # should this come after .train mode?
-        self.actor.train()
+        actor_a = self.actor(batch.state)
         actor_loss = -self.critic(batch.state, actor_a).mean() # gradient ascent for highest Q value
         actor_loss.backward()
         self.actor_optimizer.step()
-        self.actor.eval()
 
         # soft update
         for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):

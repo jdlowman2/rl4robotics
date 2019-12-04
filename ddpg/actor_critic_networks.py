@@ -25,18 +25,14 @@ class Actor(torch.nn.Module):
         nn.init.uniform_(self.layer3.weight.data, -f3, f3)
         nn.init.uniform_(self.layer3.bias.data, -f3, f3)
 
-        # Batch Norm layers
-        self.bn1 = nn.LayerNorm(l1_size)
-        self.bn2 = nn.LayerNorm(l2_size)
-
         self.action_space = action_space
 
     def forward(self, x):
         x = self.layer1(x)
-        x = F.relu(self.bn1(x))
+        x = F.relu(x)
 
         x = self.layer2(x)
-        x = F.relu(self.bn2(x))
+        x = F.relu(x)
 
         x = F.relu(self.layer3(x))
         x = torch.tanh(x) * torch.from_numpy(self.action_space.high).float()
@@ -74,16 +70,13 @@ class Critic(torch.nn.Module):
         nn.init.uniform_(self.layer3.weight.data, -f3, f3)
         nn.init.uniform_(self.layer3.bias.data, -f3, f3)
 
-        self.bn1 = nn.LayerNorm(l1_size)
-        self.bn2 = nn.LayerNorm(l2_size)
-
 
     def forward(self, x, a):
         layer1_out = self.layer1(x)
         layer1_bn = F.relu(self.bn1(layer1_out))
 
         layer2_out = self.layer2(torch.cat([layer1_bn, a], dim=1))
-        layer2_bn = F.relu(self.bn2(layer2_out))
+        layer2_bn = F.relu(layer2_out)
 
         q_value = self.layer3(layer2_bn)
 
