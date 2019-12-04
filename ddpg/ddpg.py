@@ -33,7 +33,7 @@ def adjust_mountain_reward(state, reward):
 
 class DDPG:
     def __init__(self, opt):
-        self.opt = opt
+        self.params = opt
         self.start_time = time.time()
         self.training_timesteps = 0
         self.last_mean = 1E6
@@ -43,22 +43,22 @@ class DDPG:
 
     def update_params(self):
         self.parameters = {
-            "Environment Name"            : opt.env_name,
-            "MAX_EPISODES"                : self.opt.max_episodes,
-            "MEM_SIZE"                    : self.opt.mem_size,
-            "MEMORY_MIN"                  : self.opt.mem_min,
-            "BATCH_SIZE"                  : self.opt.batch_size,
-            "GAMMA"                       : self.opt.gamma,
-            "TAU"                         : self.opt.tau,
-            "LEARNING_RATE_ACTOR"         : self.opt.lr_actor,
-            "LEARNING_RATE_CRITIC"        : self.opt.lr_critic,
-            "OU_NOISE_THETA"              : self.opt.ou_noise_theta,
-            "OU_NOISE_SIGMA"              : self.opt.ou_noise_sigma,
+            "Environment Name"            : self.params.env_name,
+            "MAX_EPISODES"                : self.params.max_episodes,
+            "MEM_SIZE"                    : self.params.mem_size,
+            "MEMORY_MIN"                  : self.params.mem_min,
+            "BATCH_SIZE"                  : self.params.batch_size,
+            "GAMMA"                       : self.params.gamma,
+            "TAU"                         : self.params.tau,
+            "LEARNING_RATE_ACTOR"         : self.params.lr_actor,
+            "LEARNING_RATE_CRITIC"        : self.params.lr_critic,
+            "OU_NOISE_THETA"              : self.params.ou_noise_theta,
+            "OU_NOISE_SIGMA"              : self.params.ou_noise_sigma,
             "start time"                  : self.start_time,
-            "L1_SIZE"                     : self.opt.l1_size,
-            "L2_SIZE"                     : self.opt.l2_size,
-            "OU_NOISE_SIGMA_DECAY_PER_EPS": self.opt.ou_noise_decay,
-            "MIN_OU_NOISE_SIGMA"          : self.opt.min_ou_noise_sigma,
+            "L1_SIZE"                     : self.params.l1_size,
+            "L2_SIZE"                     : self.params.l2_size,
+            "OU_NOISE_SIGMA_DECAY_PER_EPS": self.params.ou_noise_decay,
+            "MIN_OU_NOISE_SIGMA"          : self.params.min_ou_noise_sigma,
             "LastMeanError"               : self.last_mean,
             "LastVarError"                : self.last_var,
             "Training Timesteps"          : self.training_timesteps
@@ -71,27 +71,27 @@ class DDPG:
         self.env.reset()
 
         t = time.localtime()
-        if not self.opt.load_from:
+        if not self.params.load_from:
             self.name_suffix = "_" + self.env.spec.id[0:3] +"_"+ str(t.tm_mon) + "_" + str(t.tm_mday) + "_" + \
                     str(t.tm_hour) + "_" + str(t.tm_min)
         else:
-            self.name_suffix = self.opt.load_from
+            self.name_suffix = self.params.load_from
 
         obs_size    = self.env.observation_space.shape[0]
         action_size = self.env.action_space.shape[0]
 
-        self.actor        = Actor(obs_size, self.env.action_space, self.opt.l1_size, self.opt.l2_size)
-        self.critic       = Critic(obs_size, action_size, self.opt.l1_size, self.opt.l2_size)
+        self.actor        = Actor(obs_size, self.env.action_space, self.params.l1_size, self.params.l2_size)
+        self.critic       = Critic(obs_size, action_size, self.params.l1_size, self.params.l2_size)
 
-        self.target_actor = Actor(obs_size, self.env.action_space, self.opt.l1_size, self.opt.l2_size)
+        self.target_actor = Actor(obs_size, self.env.action_space, self.params.l1_size, self.params.l2_size)
         self.target_actor.load_state_dict(self.actor.state_dict())
-        self.target_critic= Critic(obs_size, action_size, self.opt.l1_size, self.opt.l2_size)
+        self.target_critic= Critic(obs_size, action_size, self.params.l1_size, self.params.l2_size)
         self.target_critic.load_state_dict(self.critic.state_dict())
 
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), self.opt.lr_actor)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), self.opt.lr_critic, weight_decay=0.01)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), self.params.lr_actor)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), self.params.lr_critic, weight_decay=0.01)
 
-        self.memory = Memory(self.opt.mem_size)
+        self.memory = Memory(self.params.mem_size)
 
         self.start_time = time.time()
         self.solved = None
@@ -99,15 +99,15 @@ class DDPG:
 
         if opt.noise_type == "ou":
             self.noise = NoiseProcess(self.env.action_space,
-                                        self.opt.ou_noise_theta,
-                                        self.opt.ou_noise_sigma,
-                                        self.opt.ou_noise_decay,
-                                        self.opt.min_ou_noise_sigma)
+                                        self.params.ou_noise_theta,
+                                        self.params.ou_noise_sigma,
+                                        self.params.ou_noise_decay,
+                                        self.params.min_ou_noise_sigma)
         elif opt.noise_type == "normal":
             self.noise = NormalNoiseProcess(self.env.action_space,
-                                             self.opt.normal_noise_var,
-                                             self.opt.normal_noise_decay,
-                                             self.opt.min_normal_noise)
+                                             self.params.normal_noise_var,
+                                             self.params.normal_noise_decay,
+                                             self.params.min_normal_noise)
         else:
             raise("Invalid noise type provided")
 
@@ -115,7 +115,7 @@ class DDPG:
 
     def fill_memory(self):
         steps = 0
-        while steps < self.opt.mem_min:
+        while steps < self.params.mem_min:
             state = self.env.reset()
             done = False
 
@@ -147,7 +147,7 @@ class DDPG:
         self.fill_memory()
         self.training_timesteps = 0
 
-        for episode_num in range(self.opt.max_episodes):
+        for episode_num in range(self.params.max_episodes):
             state = self.env.reset()
             done = False
             step_scores = []
@@ -170,18 +170,18 @@ class DDPG:
 
                 state = next_state
 
-                if self.memory.max_entry > self.opt.mem_min:
+                if self.memory.max_entry > self.params.mem_min:
                     actor_loss, critic_loss = self.update_networks()
 
             training_episode_rewards.append(sum(step_scores))
             self.noise.decay()
 
-            print("Episode: ", episode_num, " / ", self.opt.max_episodes,
+            print("Episode: ", episode_num, " / ", self.params.max_episodes,
                   " | Score: ", np.array(sum(step_scores)).round(4))
 
-            if episode_num % self.opt.print_freq == 0:
-                average_episode_score = sum(training_episode_rewards[-self.opt.print_freq:])/float(self.opt.print_freq)
-                print("\nEpisode: ", episode_num, " / ", self.opt.max_episodes,
+            if episode_num % self.params.print_freq == 0:
+                average_episode_score = sum(training_episode_rewards[-self.params.print_freq:])/float(self.params.print_freq)
+                print("\nEpisode: ", episode_num, " / ", self.params.max_episodes,
                       " | Avg Score: ",
                       np.array(average_episode_score).round(4),
                       " | Elapsed time [s]: ",
@@ -190,26 +190,31 @@ class DDPG:
                 print("Actor loss: ", actor_loss.detach().numpy().round(4).item(),
                         "critic_loss: ", critic_loss.detach().numpy().round(4).item())
 
-            if episode_num % self.opt.save_freq == 0:
+            if episode_num % self.params.save_freq == 0:
                 print("\nAverage metric at iteration ", episode_num)
                 average, variance = self.compute_average_metric()
                 test_episode_rewards["mean"].append(average)
                 test_episode_rewards["var"].append(variance)
 
-                save_actor_now = episode_num%self.opt.save_actor_freq == 0
-                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
-                                                save_actor=save_actor_now)
+                if episode_num%self.params.save_actor_freq == 0:
+                    self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.params.max_episodes),
+                                                                            training_episode_rewards,
+                                                                            test_episode_rewards,
+                                                                            save_actor=True)
+                else:
+                    self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.params.max_episodes))
+
                 self.check_if_solved(average, episode_num)
 
-                if "mountain" in self.env.spec.id.lower() and abs(average) < 1E-12:
-                    return False
 
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
         print("Episode Scores: \n", training_episode_rewards)
         self.env.close()
-        ddpg.save_experiment("eps_"+str(self.opt.max_episodes) + "_of_"+str(self.opt.max_episodes),
-                                training_episode_rewards, test_episode_rewards, save_actor=True, save_critic=True, )
+        self.save_experiment("eps_"+str(self.params.max_episodes) + "_of_"+str(self.params.max_episodes),
+                                                                training_episode_rewards,
+                                                                test_episode_rewards,
+                                                                save_actor=True, save_critic=True, )
 
         return True
 
@@ -226,10 +231,10 @@ class DDPG:
 
     # mini-batch sample and update networks
     def update_networks(self):
-        batch = self.memory.sample(self.opt.batch_size)
+        batch = self.memory.sample(self.params.batch_size)
 
         with torch.no_grad(): # Don't need gradient for target networks
-            target_q = batch.reward + self.opt.gamma * torch.mul(\
+            target_q = batch.reward + self.params.gamma * torch.mul(\
                                 self.target_critic(batch.next_state,
                                     self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
@@ -248,10 +253,10 @@ class DDPG:
 
         # soft update
         for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
-            target_param.data.copy_(self.opt.tau * param.data + (1 - self.opt.tau) * target_param.data)
+            target_param.data.copy_(self.params.tau * param.data + (1 - self.params.tau) * target_param.data)
 
         for param, target_param in zip(self.actor.parameters(), self.target_actor.parameters()):
-            target_param.data.copy_(self.opt.tau * param.data + (1 - self.opt.tau) * target_param.data)
+            target_param.data.copy_(self.params.tau * param.data + (1 - self.params.tau) * target_param.data)
 
         return actor_loss, critic_loss
 
@@ -297,7 +302,7 @@ class DDPG:
                             save_critic=False):
 
         self.update_params()
-        experiment_name = experiment_name + "_" + self.opt.exp_name + self.name_suffix
+        experiment_name = experiment_name + "_" + self.params.exp_name + self.name_suffix
 
         if self.folder_name not in os.listdir("experiments/"):
             os.mkdir("experiments/" + self.folder_name)
@@ -325,11 +330,11 @@ class DDPG:
         # NOTE: this does not load the global training parameters, so you
         # can't continue training
 
-        self.params = read_params_from_file(self.opt)
+        self.params = read_params_from_file(self.params)
         self.reset()
-        actor_file = Path("experiments/" + self.opt.load_from + "actor")
+        actor_file = Path("experiments/" + self.params.load_from + "actor")
         self.actor.load_state_dict(torch.load(actor_file))
-        critic_file = Path("experiments/" + self.opt.load_from + "critic")
+        critic_file = Path("experiments/" + self.params.load_from + "critic")
         self.critic.load_state_dict(torch.load(critic_file))
 
         self.target_actor.load_state_dict(self.actor.state_dict())
