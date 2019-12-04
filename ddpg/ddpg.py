@@ -140,7 +140,8 @@ class DDPG:
     def train(self):
         print("Starting job: \n", self.parameters)
 
-        episode_scores = []
+        training_episode_rewards = []
+        test_episode_rewards = {"mean":[], "var":[]}
         actor_loss, critic_loss = torch.tensor(1E6), torch.tensor(1E6)
 
         self.fill_memory()
@@ -172,14 +173,14 @@ class DDPG:
                 if self.memory.max_entry > self.opt.mem_min:
                     actor_loss, critic_loss = self.update_networks()
 
-            episode_scores.append(sum(step_scores))
+            training_episode_rewards.append(sum(step_scores))
             self.noise.decay()
 
             print("Episode: ", episode_num, " / ", self.opt.max_episodes,
                   " | Score: ", np.array(sum(step_scores)).round(4))
 
             if episode_num % self.opt.print_freq == 0:
-                average_episode_score = sum(episode_scores[-self.opt.print_freq:])/float(self.opt.print_freq)
+                average_episode_score = sum(training_episode_rewards[-self.opt.print_freq:])/float(self.opt.print_freq)
                 print("\nEpisode: ", episode_num, " / ", self.opt.max_episodes,
                       " | Avg Score: ",
                       np.array(average_episode_score).round(4),
@@ -192,6 +193,9 @@ class DDPG:
             if episode_num % self.opt.save_freq == 0:
                 print("\nAverage metric at iteration ", episode_num)
                 average, variance = self.compute_average_metric()
+                test_episode_rewards["mean"].append(average)
+                test_episode_rewards["var"].append(variance)
+
                 self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes))
                 self.check_if_solved(average, episode_num)
 
@@ -200,10 +204,10 @@ class DDPG:
 
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
-        print("Episode Scores: \n", episode_scores)
+        print("Episode Scores: \n", training_episode_rewards)
         self.env.close()
         ddpg.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
-                                save_critic=True)
+                                training_episode_rewards, test_episode_rewards, save_critic=True, )
 
         return True
 
@@ -250,7 +254,7 @@ class DDPG:
         return actor_loss, critic_loss
 
     def compute_average_metric(self):
-        num_to_test = 10
+        num_to_test = 25
         rewards = np.zeros(num_to_test)
 
         for demo_ind in range(num_to_test):
@@ -284,7 +288,11 @@ class DDPG:
         self.env.reset()
         return rewards
 
-    def save_experiment(self, experiment_name, save_critic=False):
+    def save_experiment(self, experiment_name,
+                            training_episode_rewards=None,
+                            test_episode_rewards=None,
+                            save_critic=False):
+
         self.update_params()
         experiment_name = experiment_name + "_" + self.opt.exp_name + self.name_suffix
 
@@ -301,6 +309,13 @@ class DDPG:
             w = csv.writer(file)
             for key, val in self.parameters.items():
                 w.writerow([key, val, "\n"])
+
+        if training_episode_rewards is not None:
+            np.save(save_location + "_train_rewards", training_episode_rewards)
+
+        if test_episode_rewards is not None:
+            np.save(save_location + "_test_rewards_mean", test_episode_rewards["mean"])
+            np.save(save_location + "_test_rewards_var", test_episode_rewards["var"])
 
     def load_experiment(self):
         # NOTE: this does not load the global training parameters, so you
@@ -324,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name"          , type=str, default="experiment_", help="Experiment name")
     parser.add_argument("--load_from"         , type=str, default="", help="Train the networks or just load a file")
 
-    parser.add_argument("--max_episodes"      , type=int, default=50000, help="total number of episodes to train")
+    parser.add_argument("--max_episodes"      , type=int, default=25000, help="total number of episodes to train")
     parser.add_argument("--mem_min"           , type=int, default=int(2E3), help="minimum size of replay memory before updating actor and critic networks")
     parser.add_argument("--mem_size"          , type=int, default=int(1E6), help="total size of replay memory")
     parser.add_argument("--batch_size"        , type=int, default=64, help="batch size when sampling from replay memory")
@@ -348,9 +363,8 @@ if __name__ == "__main__":
     parser.add_argument("--normal_noise_decay", type=float, default=0.0, help="")
     parser.add_argument("--min_normal_noise"  , type=float, default=0.2, help="")
 
-    parser.add_argument("--save_freq", type=int, default=5000, help="")
+    parser.add_argument("--save_freq", type=int, default=10, help="")
     parser.add_argument("--print_freq", type=int, default=50, help="")
-    parser.add_argument("--demonstrate_freq", type=int, default=5000, help="")
 
     opt = parser.parse_args()
     print(opt)
