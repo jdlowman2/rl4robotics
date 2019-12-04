@@ -14,6 +14,7 @@ import numpy as np
 from pathlib import Path
 import torch
 from matplotlib import pyplot as plt
+import argparse
 
 
 def save_rewards(num_intervals):
@@ -64,5 +65,14 @@ def load_random_rewards(filename):
     return info
 
 if __name__ == "__main__":
-    save_rewards(25000)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load_or_save", type=str, default="")
+    parser.add_argument("--load_filename", type=str, default="")
+    parser.add_argument("--num_intervals", type=int, default=25000)
+    opt = parser.parse_args()
+
+    if "load" in opt.load_or_save.lower():
+        load_random_rewards(opt.load_filename)
+    else:
+        save_rewards(opt.num_intervals)
 
