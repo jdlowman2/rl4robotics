@@ -10,6 +10,3 @@ Videos of learned policies can be viewed at the following links.
 [DDPG Lunar Lander](https://umich.box.com/s/2e0aze9a69wb0un85sumysd7krdc4y0i)
 
 [DDPG Mountain Car](https://umich.box.com/s/tjaegnndp0rm6f6zw4nvgli2br62o7kz)
-
-1) Deep Deterministic Policy Gradient
-2) A2C
