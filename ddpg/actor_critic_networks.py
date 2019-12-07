@@ -7,6 +7,8 @@ import torch.nn as nn
 class Actor(torch.nn.Module):
     def __init__(self, obs_size, action_space, l1_size=400, l2_size=300):
         super(Actor, self).__init__()
+        self.action_space = action_space
+
         self.layer1 = torch.nn.Linear(obs_size, l1_size)
         self.layer2 = torch.nn.Linear(l1_size, l2_size)
         self.layer3 = torch.nn.Linear(l2_size, action_space.shape[0])
@@ -28,25 +30,21 @@ class Actor(torch.nn.Module):
         self.action_space = action_space
 
     def forward(self, x):
-        x = self.layer1(x)
-        x = F.relu(x)
+        x = F.relu(self.layer1(x))
+        x = F.relu(self.layer2(x))
+        x = self.layer3(x) # Don't use relu on last layer!
 
-        x = self.layer2(x)
-        x = F.relu(x)
-
-        x = F.relu(self.layer3(x))
         x = torch.tanh(x) * torch.from_numpy(self.action_space.high).float()
         return x
 
     def take_action(self, state, added_noise=None):
-        self.eval()
         state_x = torch.from_numpy(state).float()
         action = self.forward(state_x).detach().numpy()
 
         if added_noise is not None:
             action += added_noise
 
-        return action
+        return action.clip(min=self.action_space.low, max=self.action_space.high) # TODO: clip action?
 
 
 class Critic(torch.nn.Module):

@@ -124,6 +124,7 @@ class DDPG:
                 ep_steps += 1
                 noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
+                # action = self.env.action_space.sample()
                 next_state, reward, done, _ = self.env.step(action)
 
                 # Reward shaping for mountain car
@@ -139,7 +140,8 @@ class DDPG:
     def train(self):
         print("Starting job: \n", self.parameters)
 
-        episode_scores = []
+        training_episode_rewards = []
+        test_episode_rewards = {"mean":[], "var":[]}
         actor_loss, critic_loss = torch.tensor(1E6), torch.tensor(1E6)
 
         self.fill_memory()
@@ -171,11 +173,14 @@ class DDPG:
                 if self.memory.max_entry > self.opt.mem_min:
                     actor_loss, critic_loss = self.update_networks()
 
-            episode_scores.append(sum(step_scores))
+            training_episode_rewards.append(sum(step_scores))
             self.noise.decay()
 
+            print("Episode: ", episode_num, " / ", self.opt.max_episodes,
+                  " | Score: ", np.array(sum(step_scores)).round(4))
+
             if episode_num % self.opt.print_freq == 0:
-                average_episode_score = sum(episode_scores[-self.opt.print_freq:])/float(self.opt.print_freq)
+                average_episode_score = sum(training_episode_rewards[-self.opt.print_freq:])/float(self.opt.print_freq)
                 print("\nEpisode: ", episode_num, " / ", self.opt.max_episodes,
                       " | Avg Score: ",
                       np.array(average_episode_score).round(4),
@@ -188,7 +193,12 @@ class DDPG:
             if episode_num % self.opt.save_freq == 0:
                 print("\nAverage metric at iteration ", episode_num)
                 average, variance = self.compute_average_metric()
-                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes))
+                test_episode_rewards["mean"].append(average)
+                test_episode_rewards["var"].append(variance)
+
+                save_actor_now = episode_num%self.opt.save_actor_freq == 0
+                self.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
+                                                save_actor=save_actor_now)
                 self.check_if_solved(average, episode_num)
 
                 if "mountain" in self.env.spec.id.lower() and abs(average) < 1E-12:
@@ -196,10 +206,10 @@ class DDPG:
 
         print("Finished training. Training time: ",
                     round((time.time() - self.start_time), 2) )
-        print("Episode Scores: \n", episode_scores)
+        print("Episode Scores: \n", training_episode_rewards)
         self.env.close()
-        ddpg.save_experiment("eps_"+str(episode_num) + "_of_"+str(self.opt.max_episodes),
-                                save_critic=True)
+        ddpg.save_experiment("eps_"+str(self.opt.max_episodes) + "_of_"+str(self.opt.max_episodes),
+                                training_episode_rewards, test_episode_rewards, save_actor=True, save_critic=True, )
 
         return True
 
@@ -218,20 +228,21 @@ class DDPG:
     def update_networks(self):
         batch = self.memory.sample(self.opt.batch_size)
 
-        with torch.no_grad():
+        with torch.no_grad(): # Don't need gradient for target networks
             target_q = batch.reward + self.opt.gamma * torch.mul(\
                                 self.target_critic(batch.next_state,
                                     self.target_actor(batch.next_state)), (~batch.done).float()).detach()
 
-        self.critic_optimizer.zero_grad()
         critic_q = self.critic(batch.state, batch.action)
         critic_loss = F.mse_loss(critic_q, target_q)
+
+        self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
+        actor_loss = -self.critic(batch.state, self.actor(batch.state)).mean() # gradient ascent for highest Q value
+
         self.actor_optimizer.zero_grad()
-        actor_a = self.actor(batch.state)
-        actor_loss = -self.critic(batch.state, actor_a).mean() # gradient ascent for highest Q value
         actor_loss.backward()
         self.actor_optimizer.step()
 
@@ -245,7 +256,7 @@ class DDPG:
         return actor_loss, critic_loss
 
     def compute_average_metric(self):
-        num_to_test = 10
+        num_to_test = 25
         rewards = np.zeros(num_to_test)
 
         for demo_ind in range(num_to_test):
@@ -261,7 +272,6 @@ class DDPG:
 
     def demonstrate(self, render=True):
         state = self.env.reset()
-        # state = self.scale_state(self.env.reset())
         done = False
         rewards = 0.0
 
@@ -280,7 +290,12 @@ class DDPG:
         self.env.reset()
         return rewards
 
-    def save_experiment(self, experiment_name, save_critic=False):
+    def save_experiment(self, experiment_name,
+                            training_episode_rewards=None,
+                            test_episode_rewards=None,
+                            save_actor=False,
+                            save_critic=False):
+
         self.update_params()
         experiment_name = experiment_name + "_" + self.opt.exp_name + self.name_suffix
 
@@ -289,7 +304,8 @@ class DDPG:
             print("made directory: ")
         save_location = "experiments/" + self.folder_name + "/" + experiment_name
 
-        torch.save(self.actor.state_dict(), save_location + "actor")
+        if save_actor:
+            torch.save(self.actor.state_dict(), save_location + "actor")
         if save_critic:
             torch.save(self.critic.state_dict(), save_location + "critic")
 
@@ -297,6 +313,13 @@ class DDPG:
             w = csv.writer(file)
             for key, val in self.parameters.items():
                 w.writerow([key, val, "\n"])
+
+        if training_episode_rewards is not None:
+            np.save(save_location + "_train_rewards", training_episode_rewards)
+
+        if test_episode_rewards is not None:
+            np.save(save_location + "_test_rewards_mean", test_episode_rewards["mean"])
+            np.save(save_location + "_test_rewards_var", test_episode_rewards["var"])
 
     def load_experiment(self):
         # NOTE: this does not load the global training parameters, so you
@@ -320,7 +343,7 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name"          , type=str, default="experiment_", help="Experiment name")
     parser.add_argument("--load_from"         , type=str, default="", help="Train the networks or just load a file")
 
-    parser.add_argument("--max_episodes"      , type=int, default=50000, help="total number of episodes to train")
+    parser.add_argument("--max_episodes"      , type=int, default=25000, help="total number of episodes to train")
     parser.add_argument("--mem_min"           , type=int, default=int(2E3), help="minimum size of replay memory before updating actor and critic networks")
     parser.add_argument("--mem_size"          , type=int, default=int(1E6), help="total size of replay memory")
     parser.add_argument("--batch_size"        , type=int, default=64, help="batch size when sampling from replay memory")
@@ -344,9 +367,9 @@ if __name__ == "__main__":
     parser.add_argument("--normal_noise_decay", type=float, default=0.0, help="")
     parser.add_argument("--min_normal_noise"  , type=float, default=0.2, help="")
 
-    parser.add_argument("--save_freq", type=int, default=5000, help="")
+    parser.add_argument("--save_freq", type=int, default=10, help="")
     parser.add_argument("--print_freq", type=int, default=50, help="")
-    parser.add_argument("--demonstrate_freq", type=int, default=5000, help="")
+    parser.add_argument("--save_actor_freq", type=int, default=500, help="")
 
     opt = parser.parse_args()
     print(opt)
