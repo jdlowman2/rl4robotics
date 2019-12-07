@@ -1,11 +1,9 @@
+# Reinforcement Learning for Continuous Action Spaces
 # rl4robotics
 
 EECS 545 Machine Learning Course Project Fall 2019
-Reinforcement learning for robotics
 
+This project implemented two algorithms; the deep deterministic policy gradient algorithm (DDPG) (Lillicrap et al. [2015]) and the advantage actor-criticmethod (A2C) (Mnih et al. [2016]). Each algorithm was evaluated on the OpenAI Gym environments LunarLanderContinuous-v2 and MountainCarContinuous-v0. Videos of learned policies can be viewed in the "Videos of Learned Policies" subdirectory.
 
 1) Deep Deterministic Policy Gradient
-To see an already trained network perform, in ddpg/ddpg.py, change MAX_EPISODES = 0. Run the script from within the ddpg folder. At the interactive prompt, enter the following commands:
-
-    ddpg.load_experiment(<experiment_name>) # e.g. "lunarlander_11_11"
-    ddpg.demonstrate()
+2) A2C
