@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import unittest
+import gym
 
 import IPython
 from ddpg import *
@@ -52,14 +53,14 @@ class TestMemory(unittest.TestCase):
 class TestNoise(unittest.TestCase):
 
     def test_noise(self):
-        noise = NoiseProcess((2, 1))
+        env = gym.make("LunarLanderContinuous-v2")
+        noise = NoiseProcess(env.action_space, sigma=0.2, theta=0.15,decay=0.0,min_sigma=0.2)
 
         d = []
         for i in range(100):
             d.append(noise.sample())
-
         print("Shape of sample: ", noise.sample().shape)
-        self.assertTrue(noise.sample().shape == (2,1))
+        self.assertTrue(noise.sample().shape[0] == 2)
         plt.plot([i[0] for i in d], label="action 0")
         plt.plot([i[1] for i in d], label="action 1")
         plt.legend()
