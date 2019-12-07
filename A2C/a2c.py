@@ -11,24 +11,34 @@ import torch.nn as nn
 import torch
 
 import sys, time
-
-# LOL - Technically it works if you let it run for 1000 episodes, I'll look at it 
-# more later today. 
+import argparse
 
 ############################# PARAMETERS #############################
-MAX_EPISODES = 10000
+MAX_EPISODES = 50000
 MAX_STEPS_PER_EP = 1000
-TEST_FREQUENCY = 100
-TEST_EPISODES = 100
+TEST_FREQUENCY = 10
+TEST_EPISODES = 25
+SAVE_FREQUENCY = 100
 GAMMA = 0.9           # discount factor
 LR = 1E-3             # Learning Rate
 N_HIDDEN = 128
 PRINT_DATA = 1        # how often to print data
 RENDER_GAME = False   # View the Episode. 
 
-ENVIRONMENT = "MountainCarContinuous-v0"
-# ENVIRONMENT = "Pendulum-v0"
-# ENVIRONMENT = "LunarLanderContinuous-v2"
+# ENVIRONMENT = "MountainCarContinuous-v0"
+# ENV = 'MountainCar'
+#ENVIRONMENT = "Pendulum-v0"
+# ENV = 'Pendulum'
+ENVIRONMENT = "LunarLanderContinuous-v2"
+ENV = 'LunarLander'
+
+
+###########################################
+parser = argparse.ArgumentParser()
+parser.add_argument('--v', type=str, default='1', help='Experiment Number')
+opt = parser.parse_args()
+exp_name = opt.v
+
 ######################################################################
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,7 +111,7 @@ class A2C:
 
         Qvals = Qvals[::-1]
         Qvals = torch.tensor(Qvals)
-        Qvals = (Qvals - Qvals.mean()) / (Qvals.std() + 1e-9)
+        Qvals = (Qvals - Qvals.mean()) / (Qvals.std() + 1e-5)
 
         loss = 0
         for log_prob, value, Qval in zip(log_probs, values, Qvals):
@@ -112,7 +122,7 @@ class A2C:
             loss += critic_loss + actor_loss
 
         self.optimizer.zero_grad()
-        loss.backward(retain_graph=True)  # I'm still dealing with this issue, it slows me down for . 
+        loss.min().backward()  
         self.optimizer.step()
 
 
@@ -120,10 +130,10 @@ class A2C:
     def train(self):
 
         score = 0.0
-        rewards = []
-        log_probs = []
-        values = []
         total_rewards = []
+        mean_rewards = []
+        std_rewards = []
+        
         self.initialize_scale_state()
 
         print("Going to be training for a total of {} episodes".format(MAX_EPISODES))
@@ -133,9 +143,9 @@ class A2C:
             score = 0.0
             step_num = 0
 
-            # To improve exploration, take inital actions sampled from random distirbution. 
-            action = torch.tensor([[2 * random.random() - 1]])
-            state, reward, done, _ = self.env.step(action)
+            rewards = []
+            log_probs = []
+            values = []
 
             for t in range(MAX_STEPS_PER_EP):
                 
@@ -162,15 +172,20 @@ class A2C:
             if (e+1) % PRINT_DATA == 0:
                 print("Episode: {}, reward: {}, steps: {}".format(e+1, total_rewards[e], step_num))
 
-            # if (e+1) % TEST_FREQUENCY == 0:
-            #     print("-"*10 + " testing now " + "-"*10)
-            #     mean_reward, std_reward = self.test(TEST_EPISODES,e)
-            #     print('Mean Reward Achieved : {}, Standard Deviation : {}'.format(mean_reward, std_reward))
-            #     print("-"*50)
+            if (e+1) % TEST_FREQUENCY == 0:
+                print("-"*10 + " testing now " + "-"*10)
+                mean_reward, std_reward = self.test(TEST_EPISODES,e)
+                print('Mean Reward Achieved : {} \nStandard Deviation : {}'.format(mean_reward, std_reward))
+                mean_rewards.append(mean_reward)
+                std_rewards.append(std_reward)
+                print("-"*50)
+
+        np.save('experiments/'+ENV+'/'+ENV+'_total_rewards_'+exp_name+'.npy', total_rewards)
+        np.save('experiments/'+ENV+'/'+ENV+'_mean_rewards_'+exp_name+'.npy', mean_rewards)
+        np.save('experiments/'+ENV+'/'+ENV+'_std_rewards_'+exp_name+'.npy', std_rewards)
 
         self.env.close()
-
-    # TODO -- Finish test function to get average and std reward. 
+ 
     def test(self, num_episodes, train_episode):
         testing_rewards = []
         for e in range(TEST_EPISODES):
@@ -182,7 +197,7 @@ class A2C:
                 temp_reward.append(reward)
                 if done:
                     break
-            testing_rewards.append(reward)
+            testing_rewards.append(sum(temp_reward))
         return np.mean(testing_rewards), np.std(testing_rewards)
 
 
@@ -194,11 +209,9 @@ class A2C:
             action, log_prob, value = self.select_action(state)
             state, reward, done, _ = self.env.step(action)
 
+    def save_experiment(self, environment):
 
-    # TODO -- Figure out how to save. 
-    def save_experiment(self, experiment_name):
-
-        path = "experiments/" + experiments_name + "_actorCritic"
+        path = "experiments/" + environment + "_a2c_" + exp_name
 
         torch.save(self.ActorCritic.state_dict(), path)
 
@@ -216,14 +229,13 @@ class A2C:
             "LEARNING_RATE_CRITIC":LR_CRITIC,
         }
 
-        parameters_path = "experiments/" + experiment_name + ".csv"
+        parameters_path = "experiments/" + environment + "_a2c_"+exp_name+".csv"
         with open(parameters_path, "w") as file:
             w = csv.writer(file)
             for key, val in parameters.items():
                 w.writerow([key, val, "\n"])
 
-
-
 if __name__ == "__main__":
     A2C = A2C(ENVIRONMENT)
     A2C.train()
+    # A2C.save_experiment(ENVIRONMENT)
