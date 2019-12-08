@@ -22,13 +22,13 @@ from read_params_from_file import *
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
 
-def adjust_mountain_reward(state, reward):
-    # From https://medium.com/@ts1829/solving-mountain-car-with-q-learning-b77bf71b1de2
-    reward = state[0] + 0.5 # Adjust reward based on car position
-    if state[0] >= 0.5: # Adjust reward for task completion
-        reward += 1
+# def adjust_mountain_reward(state, reward):
+#     # From https://medium.com/@ts1829/solving-mountain-car-with-q-learning-b77bf71b1de2
+#     reward = state[0] + 0.5 # Adjust reward based on car position
+#     if state[0] >= 0.5: # Adjust reward for task completion
+#         reward += 1
 
-    return reward
+#     return reward
 
 
 class DDPG:
@@ -52,16 +52,23 @@ class DDPG:
             "TAU"                         : self.params.tau,
             "LEARNING_RATE_ACTOR"         : self.params.lr_actor,
             "LEARNING_RATE_CRITIC"        : self.params.lr_critic,
+            "NOISE_TYPE"                  : self.params.noise_type,
             "OU_NOISE_THETA"              : self.params.ou_noise_theta,
             "OU_NOISE_SIGMA"              : self.params.ou_noise_sigma,
+            "NORMAL_VAR"                  : self.params.normal_noise_var,
+            "NORMAL_DECAY"                : self.params.normal_noise_decay,
+            "MIN_NORMAL_VAR"              : self.params.min_normal_noise,
             "start time"                  : self.start_time,
             "L1_SIZE"                     : self.params.l1_size,
             "L2_SIZE"                     : self.params.l2_size,
             "OU_NOISE_SIGMA_DECAY_PER_EPS": self.params.ou_noise_decay,
             "MIN_OU_NOISE_SIGMA"          : self.params.min_ou_noise_sigma,
+            "Save Freq"                   : self.params.save_freq,
+            "Print Freq"                  : self.params.print_freq,
+            "Save Actor Freq"             : self.params.save_actor_freq,
             "LastMeanError"               : self.last_mean,
             "LastVarError"                : self.last_var,
-            "Training Timesteps"          : self.training_timesteps
+            "Training Timesteps"          : self.training_timesteps,
             }
 
 
@@ -127,10 +134,6 @@ class DDPG:
                 # action = self.env.action_space.sample()
                 next_state, reward, done, _ = self.env.step(action)
 
-                # Reward shaping for mountain car
-                if "mountain" in self.env.spec.id.lower():
-                    reward = adjust_mountain_reward(state, reward)
-
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
 
@@ -159,9 +162,6 @@ class DDPG:
                 noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
                 next_state, reward, done, _ = self.env.step(action)
-
-                if "mountain" in self.env.spec.id.lower():
-                    reward = adjust_mountain_reward(state, reward)
 
                 step_scores.append(float(reward))
 
@@ -219,15 +219,21 @@ class DDPG:
         return True
 
     def check_if_solved(self, average, episode_num):
+        solved = True
         if "mountaincar" in self.env.spec.id.lower() and average > 90.0:
-            if self.solved is None:
-                self.solved = episode_num
-                print(self.env.spec.id, "solved after ", self.solved)
+            solved = True
 
         elif "lunarlander" in self.env.spec.id.lower() and average > 200.0:
-            if self.solved is None:
-                self.solved = episode_num
-                print(self.env.spec.id, "solved after ", self.solved)
+            solved = True
+
+        elif "bipedal" in self.env.spec.id.lower() and average > 300.0:
+            solved = True
+
+        if solved and self.solved is None:
+            self.solved = episode_num
+            print(self.env.spec.id, "solved after ", self.solved)
+
+        return solved
 
     # mini-batch sample and update networks
     def update_networks(self):
