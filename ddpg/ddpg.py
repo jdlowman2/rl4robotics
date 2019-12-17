@@ -22,14 +22,6 @@ from read_params_from_file import *
 Sequence = namedtuple("Sequence", \
                 ["state", "action", "reward", "next_state", "done"])
 
-# def adjust_mountain_reward(state, reward):
-#     # From https://medium.com/@ts1829/solving-mountain-car-with-q-learning-b77bf71b1de2
-#     reward = state[0] + 0.5 # Adjust reward based on car position
-#     if state[0] >= 0.5: # Adjust reward for task completion
-#         reward += 1
-
-#     return reward
-
 
 class DDPG:
     def __init__(self, opt):
@@ -121,8 +113,8 @@ class DDPG:
         self.folder_name = opt.exp_name + self.name_suffix
 
     def fill_memory(self):
-        steps = 0
-        while steps < self.params.mem_min:
+        fill_steps = 0
+        while fill_steps < self.params.mem_min:
             state = self.env.reset()
             done = False
 
@@ -131,14 +123,13 @@ class DDPG:
                 ep_steps += 1
                 noise_to_add = self.noise.sample()
                 action = self.actor.take_action(state, noise_to_add)
-                # action = self.env.action_space.sample()
                 next_state, reward, done, _ = self.env.step(action)
 
                 self.memory.push( \
                     Sequence(state, action, reward, next_state, done))
 
                 state = next_state
-                steps += 1
+                fill_steps += 1
 
     def train(self):
         print("Starting job: \n", self.parameters)
@@ -271,7 +262,7 @@ class DDPG:
         rewards = np.zeros(num_to_test)
 
         for demo_ind in range(num_to_test):
-            rewards[demo_ind] = self.demonstrate(render=False)
+            rewards[demo_ind] = self.demonstrate()
 
         print("Evaluation over ", num_to_test, "episodes.\n\t",
                                 " Mean: ", rewards.mean(),
@@ -281,7 +272,7 @@ class DDPG:
 
         return rewards.mean(), rewards.var()
 
-    def demonstrate(self, render=True):
+    def demonstrate(self):
         state = self.env.reset()
         done = False
         rewards = 0.0
@@ -289,8 +280,6 @@ class DDPG:
         ep_steps = 0
         while not done and ep_steps < self.env._max_episode_steps:
             ep_steps += 1
-            if render:
-                self.env.render()
 
             action = self.actor.take_action(state, None)
             next_state, reward, done, _ = self.env.step(action)
@@ -332,23 +321,8 @@ class DDPG:
             np.save(save_location + "_test_rewards_mean", test_episode_rewards["mean"])
             np.save(save_location + "_test_rewards_var", test_episode_rewards["var"])
 
-    def load_experiment(self):
-        # NOTE: this does not load the global training parameters, so you
-        # can't continue training
-
-        self.params = read_params_from_file(self.params)
-        self.reset()
-        actor_file = Path("experiments/" + self.params.load_from + "actor")
-        self.actor.load_state_dict(torch.load(actor_file))
-        critic_file = Path("experiments/" + self.params.load_from + "critic")
-        self.critic.load_state_dict(torch.load(critic_file))
-
-        self.target_actor.load_state_dict(self.actor.state_dict())
-        self.target_critic.load_state_dict(self.critic.state_dict())
-
 
 if __name__ == "__main__":
-    ## Parameters ##
     parser = argparse.ArgumentParser()
     parser.add_argument("--env_name"          , type=str, default="LunarLanderContinuous-v2", help="Environment name")
     parser.add_argument("--exp_name"          , type=str, default="experiment_", help="Experiment name")
