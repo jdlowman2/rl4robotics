@@ -7,8 +7,8 @@ This project implemented two algorithms; the deep deterministic policy gradient 
 
 Videos of learned policies can be viewed at the following links.
 
-[DDPG Bipedal Walker](https://umich.box.com/s/w2mp91pij8atyvr40a0mtsyhl27jibcc)
+[DDPG Bipedal Walker](https://youtu.be/om7y9JKw0HE)
 
-[DDPG Lunar Lander](https://umich.box.com/s/2e0aze9a69wb0un85sumysd7krdc4y0i)
+[DDPG Lunar Lander](https://youtu.be/L4hnSnL-q5w)
 
-[DDPG Mountain Car](https://umich.box.com/s/tjaegnndp0rm6f6zw4nvgli2br62o7kz)
+[DDPG Mountain Car](https://youtu.be/8R-BVsU6zCw)
